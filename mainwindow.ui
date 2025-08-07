@@ -1,0 +1,919 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>934</width>
+    <height>684</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>MainWindow</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QGridLayout" name="gridLayout_3">
+    <item row="0" column="0" rowspan="2">
+     <layout class="QVBoxLayout" name="verticalLayout">
+      <item>
+       <spacer name="verticalSpacer_2">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>20</width>
+          <height>40</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_18">
+        <item>
+         <widget class="QLabel" name="label">
+          <property name="text">
+           <string>FPGA registers</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="refresh">
+          <property name="text">
+           <string>Refresh</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="hardReset">
+          <property name="text">
+           <string>Hard reset</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="writeRegisters">
+          <property name="text">
+           <string>Write</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <spacer name="verticalSpacer_3">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>20</width>
+          <height>40</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_2">
+        <item>
+         <widget class="QLabel" name="label_2">
+          <property name="text">
+           <string>CONV Low Int</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="ConvLowInt"/>
+        </item>
+        <item>
+         <widget class="QLabel" name="conv_low_int_text">
+          <property name="text">
+           <string>us = 50000</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_19">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_3">
+        <item>
+         <widget class="QLabel" name="label_3">
+          <property name="text">
+           <string>CONV High Int</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="ConvHighInt"/>
+        </item>
+        <item>
+         <widget class="QLabel" name="conv_high_int_text">
+          <property name="text">
+           <string>us = 50000</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_18">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_4">
+        <item>
+         <widget class="QLabel" name="label_4">
+          <property name="text">
+           <string>Conv Config</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="ConvConfig"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_17">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_5">
+        <item>
+         <widget class="QLabel" name="label_5">
+          <property name="text">
+           <string>MCLK Freq [MHz]</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="MCLKFreq"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_16">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_6">
+        <item>
+         <widget class="QLabel" name="label_6">
+          <property name="text">
+           <string>CLK (High) (Low)</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="CLKHigh"/>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="CLKLow"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_15">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_7">
+        <item>
+         <widget class="QLabel" name="label_7">
+          <property name="text">
+           <string>DDC CLK Config</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="DDCCLKConfig"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_14">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_8">
+        <item>
+         <widget class="QLabel" name="label_8">
+          <property name="text">
+           <string>Format</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="Format"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_13">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_9">
+        <item>
+         <widget class="QLabel" name="label_9">
+          <property name="text">
+           <string>Channel Count</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="ChannelCount"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_3">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_10">
+        <item>
+         <widget class="QLabel" name="label_10">
+          <property name="text">
+           <string>nDVALID Ignore</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="nDVALIDIgnore"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_4">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_11">
+        <item>
+         <widget class="QLabel" name="label_11">
+          <property name="text">
+           <string>nDVALID Read</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="nDVALIDRead"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_5">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_12">
+        <item>
+         <widget class="QLabel" name="label_13">
+          <property name="text">
+           <string>DCLK (High) (Low)</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="DCLKHigh"/>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="DCLKLow"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_6">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_13">
+        <item>
+         <widget class="QLabel" name="label_12">
+          <property name="text">
+           <string>DCLK Config</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="DCLKConfig"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_7">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_14">
+        <item>
+         <widget class="QLabel" name="label_14">
+          <property name="text">
+           <string>DCLK Wait (MCLK)</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="DCLKWait"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_8">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_15">
+        <item>
+         <widget class="QLabel" name="label_15">
+          <property name="text">
+           <string>Hardware Trigger</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="HardwareTrigger"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_9">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_16">
+        <item>
+         <widget class="QLabel" name="label_16">
+          <property name="text">
+           <string>CLK_CFG (High) (Low)</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="CLK_CFGHigh"/>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="CLK_CFGLow"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_10">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <spacer name="verticalSpacer">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>20</width>
+          <height>40</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_24">
+        <item>
+         <widget class="QPushButton" name="saveFolder">
+          <property name="text">
+           <string>Folder</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="saveFolderLabel">
+          <property name="text">
+           <string/>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_11">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_25">
+        <item>
+         <widget class="QLabel" name="label_19">
+          <property name="text">
+           <string>Filename</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="saveFileName"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_12">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_17">
+        <item>
+         <widget class="QLabel" name="label_20">
+          <property name="text">
+           <string>Files</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="nFiles"/>
+        </item>
+        <item>
+         <widget class="QPushButton" name="getData">
+          <property name="text">
+           <string>Get data</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QProgressBar" name="progressBar">
+          <property name="value">
+           <number>24</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </item>
+    <item row="0" column="1">
+     <layout class="QVBoxLayout" name="verticalLayout_2">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout">
+        <item>
+         <spacer name="horizontalSpacer_20">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QLabel" name="label_17">
+          <property name="text">
+           <string>ADC range</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="ADCrange"/>
+        </item>
+        <item>
+         <widget class="QLabel" name="label_18">
+          <property name="text">
+           <string>pC</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_21">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QWidget" name="tracePlot" native="true">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QVBoxLayout" name="verticalLayout_6">
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_23">
+          <item>
+           <widget class="QPushButton" name="readFileButton">
+            <property name="text">
+             <string>File Path</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="traceNumber"/>
+          </item>
+          <item>
+           <spacer name="horizontalSpacer_23">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QLabel" name="readFilePath">
+          <property name="text">
+           <string>file path</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </item>
+    <item row="1" column="1">
+     <layout class="QVBoxLayout" name="verticalLayout_4">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_22">
+        <item>
+         <spacer name="horizontalSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QLabel" name="label_21">
+          <property name="text">
+           <string>Borders:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="edgeLeft"/>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="edgeRight"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_2">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QLabel" name="label_22">
+          <property name="text">
+           <string>Pixel sizes:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="pixelX"/>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="pixelY"/>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_26">
+        <item>
+         <layout class="QGridLayout" name="gridLayout">
+          <item row="1" column="0">
+           <widget class="QLineEdit" name="imageLowScale"/>
+          </item>
+          <item row="0" column="0" colspan="2">
+           <widget class="QWidget" name="imagePlot" native="true">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLineEdit" name="imageUpperScale"/>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QGridLayout" name="gridLayout_2">
+          <item row="1" column="1">
+           <widget class="QLineEdit" name="mixUpperScale"/>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLineEdit" name="mixLowScale"/>
+          </item>
+          <item row="0" column="0" colspan="2">
+           <widget class="QWidget" name="mixPlot" native="true">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QVBoxLayout" name="verticalLayout_3">
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_19">
+          <item>
+           <widget class="QPushButton" name="decoderMatrix">
+            <property name="text">
+             <string>File Path</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="decoderMatrixLabel">
+            <property name="text">
+             <string>decoder matrix</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="useNormalization">
+            <property name="text">
+             <string>Normilize</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QRadioButton" name="darkCurrent">
+            <property name="text">
+             <string>dark current</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_20">
+          <item>
+           <widget class="QPushButton" name="imageFile">
+            <property name="text">
+             <string>File Path</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="imageFileLabel">
+            <property name="text">
+             <string>image file</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="useThreshold">
+            <property name="text">
+             <string>Clean Image</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QRadioButton" name="openBeam">
+            <property name="text">
+             <string>open beam</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_21">
+          <item>
+           <widget class="QPushButton" name="openBeamFile">
+            <property name="text">
+             <string>File Path</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="openBeamFileLabel">
+            <property name="text">
+             <string>open beam file</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="buildImage">
+            <property name="text">
+             <string>Build image</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>934</width>
+     <height>33</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
