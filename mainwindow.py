@@ -62,8 +62,8 @@ class Ui(QMainWindow):
 
         self.setWindowTitle("DDC264EVM_UI")
 
-        self.ConvLowInt.setText("10000")
-        self.ConvHighInt.setText("10000")
+        self.ConvLowInt.setText("320")
+        self.ConvHighInt.setText("320")
 
         self.ConvConfig.addItem("Free run")
         self.ConvConfig.addItem("Low")
@@ -133,6 +133,7 @@ class Ui(QMainWindow):
         public_documents = os.path.join(
             os.environ.get("PUBLIC", r"C:\Users\Public"), "Documents"
         )
+        self.save_path = public_documents
         if os.path.isdir(public_documents):
             self.saveFolderLabel.setText(public_documents)
         else:
@@ -206,6 +207,7 @@ class Ui(QMainWindow):
         self.darkCurrent.setChecked(True)
 
         self.update_registers(is_startup=True)
+        self.refresh_registers(is_startup=True)
 
         self.getData.clicked.connect(self.record_data)
         self.ConvLowInt.textChanged.connect(self.update_time)
@@ -250,6 +252,7 @@ class Ui(QMainWindow):
             display_text = path
         self.saveFolderLabel.setText(display_text)
         self.saveFolderLabel.setToolTip(path)
+        self.save_path = path if path else self.save_path
 
     def update_registers(self, is_startup=False):
         try:
@@ -284,11 +287,12 @@ class Ui(QMainWindow):
         except ValueError:
             self.statusBar().showMessage("Invalid input")
 
-    def refresh_registers(self):
+    def refresh_registers(self, is_startup=False):
         try:
             self.fpga.refresh()
             self.update_registers()
-            self.statusBar().showMessage("Registers refreshed and updated successfully")
+            if not is_startup:
+                self.statusBar().showMessage("Registers refreshed and updated successfully")
         except Exception as e:
             self.statusBar().showMessage(f"Error refreshing registers: {str(e)}")
 
@@ -321,7 +325,7 @@ class Ui(QMainWindow):
                 numFiles = int(self.nFiles.text())
                 if numFiles <= 0:
                     raise ValueError
-                folder_path = self.saveFolderLabel.text()
+                folder_path = self.save_path
                 if folder_path:
                     self.progressBar.setMaximum(numFiles)
                     self.progressBar.setValue(0)
