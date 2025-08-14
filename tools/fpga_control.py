@@ -344,34 +344,41 @@ class FPGAControl:
 
         with open(filename, "w") as dataFile:
             samples_per_channel = reads // 2
-            for sample_idx in range(samples_per_channel):
-                for ch in range(channels):
+
+            bit_rate = next(k for k, v in self.bit_rates.items() if v == self.DDCbit8)
+            for ch in range(channels - 1, -1, -1):
+                prefix = "0" if (ch + 1) < 10 else ""
+
+                for sample_idx in range(samples_per_channel):
                     data_idx_a = sample_idx * channels + ch
-                    data_idx_b = (sample_idx + samples_per_channel) * channels + ch
-
-                    prefix = "0" if (ch + 1) < 10 else ""
-
-                    bit_rate = next(
-                        k for k, v in self.bit_rates.items() if v == self.DDCbit8
-                    )
 
                     if all_data_aorbfirst == 0:
                         if data_idx_a < len(all_data):
                             dataFile.write(
                                 f"{prefix}{ch+1}A, {sample_idx}, {all_data[data_idx_a]}, {0}, {0}, {bit_rate}\n"
                             )
+                    else:
+                        if data_idx_a < len(all_data):
+                            dataFile.write(
+                                f"{prefix}{ch+1}A, {sample_idx}, {all_data[data_idx_a]}, {0}, {0}, {bit_rate}\n"
+                            )
+
+            for ch in range(channels - 1, -1, -1):
+                prefix = "0" if (ch + 1) < 10 else ""
+
+                for sample_idx in range(samples_per_channel):
+                    data_idx_b = (sample_idx + samples_per_channel) * channels + ch
+
+                    if all_data_aorbfirst == 0:
                         if data_idx_b < len(all_data):
                             dataFile.write(
                                 f"{prefix}{ch+1}B, {sample_idx}, {all_data[data_idx_b]}, {0}, {0}, {bit_rate}\n"
                             )
                     else:
+                        # When B comes first, we need to handle the indexing differently
                         if data_idx_b < len(all_data):
                             dataFile.write(
                                 f"{prefix}{ch+1}B, {sample_idx}, {all_data[data_idx_b]}, {0}, {0}, {bit_rate}\n"
-                            )
-                        if data_idx_a < len(all_data):
-                            dataFile.write(
-                                f"{prefix}{ch+1}A, {sample_idx}, {all_data[data_idx_a]}, {0}, {0}, {bit_rate}\n"
                             )
 
         return f"File {filename} was saved successfully"

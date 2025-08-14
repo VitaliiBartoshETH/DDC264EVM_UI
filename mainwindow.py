@@ -62,8 +62,8 @@ class Ui(QMainWindow):
 
         self.setWindowTitle("DDC264EVM_UI")
 
-        self.ConvLowInt.setText("320")
-        self.ConvHighInt.setText("320")
+        self.ConvLowInt.setText("10000")
+        self.ConvHighInt.setText("10000")
 
         self.ConvConfig.addItem("Free run")
         self.ConvConfig.addItem("Low")
@@ -112,7 +112,7 @@ class Ui(QMainWindow):
         self.ADCrange.addItem("100.0")
         self.ADCrange.addItem("50.0")
         self.ADCrange.addItem("12.5")
-        
+
         self.edgeLeft.setText("156")
         self.edgeRight.setText("356")
 
@@ -292,7 +292,9 @@ class Ui(QMainWindow):
             self.fpga.refresh()
             self.update_registers()
             if not is_startup:
-                self.statusBar().showMessage("Registers refreshed and updated successfully")
+                self.statusBar().showMessage(
+                    "Registers refreshed and updated successfully"
+                )
         except Exception as e:
             self.statusBar().showMessage(f"Error refreshing registers: {str(e)}")
 
