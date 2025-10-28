@@ -7,6 +7,14 @@ import numpy as np
 import os
 import time
 import datetime
+# Optional serial support for Arduino relay switching. Import is guarded so
+# the app continues to work if pyserial is not installed in the environment.
+try:
+    import serial
+    from serial.tools import list_ports as serial_list_ports
+except Exception:
+    serial = None
+    serial_list_ports = None
 
 
 class ReaderWorker(QObject):
@@ -17,7 +25,7 @@ class ReaderWorker(QObject):
     request_power_cycle = pyqtSignal()
 
     def __init__(
-        self, fpga, folder_path, file_name, numFiles, max_retries=5, poll_timeout=6.0
+        self, fpga, folder_path, file_name, numFiles, max_retries=1, poll_timeout=1.0
     ):
         super().__init__()
         self.fpga = fpga
@@ -76,9 +84,9 @@ class ReaderWorker(QObject):
             )
             # emit a short summary (trim if long)
             meth_list = ", ".join(fpga_methods[:20])
-            if len(fpga_methods) > 20:
-                meth_list += ", ..."
-            self.status.emit(f"FPGA methods: {meth_list}")
+            #if len(fpga_methods) > 20:
+            #    meth_list += ", ..."
+            #self.status.emit(f"FPGA methods: {meth_list}")
         except Exception:
             # non-fatal; continue
             pass
@@ -103,10 +111,10 @@ class ReaderWorker(QObject):
             # ordered list of candidate recovery method names (common variants)
             candidates = [
                 # reload DLL / USB helpers
-                "usb_reset",
+                #"usb_reset",
                 "reopen",
-                "reopen_device",
-                "reconnect_device",
+                #"reopen_device",
+                #"reconnect_device",
                 # fallback register restore (rewrites registers after a reset)
                 "restore_registers",
                 # higher-level reconnects first
@@ -134,7 +142,7 @@ class ReaderWorker(QObject):
                         performed.append(name)
                         self.status.emit(f"Attempted FPGA.{name}()")
                         # small pause after a recovery call
-                        time.sleep(0.3)
+                        time.sleep(0.1)
                         # some methods may be enough; continue trying others only if needed
                     except Exception as e:
                         # continue trying other methods
@@ -147,8 +155,18 @@ class ReaderWorker(QObject):
 
         try:
             for i in range(self.numFiles):
-                desired_index = start_index + i + 1
+                # Recompute the highest existing index on disk before each
+                # capture attempt. This makes the worker robust to manual
+                # power-cycles or external files appearing while the worker
+                # was paused so we don't accidentally skip or repeat numbers.
+                try:
+                    cur_idxs = _list_indices()
+                    current_max = max(cur_idxs) if cur_idxs else 0
+                except Exception:
+                    current_max = start_index
+                desired_index = current_max + 1
                 success = False
+                severe_error = False
                 attempt = 0
                 while attempt < self.max_retries and not success:
                     attempt += 1
@@ -167,19 +185,76 @@ class ReaderWorker(QObject):
                         if isinstance(ret, int) and ret < 0:
                             error_msg = f"get_data returned error code {ret}"
                             self.status.emit(error_msg)
+                            # If the driver returned -5 or -4 consider this a
+                            # severe error that requires manual power-cycle.
+                            if ret in (-5, -4):
+                                severe_error = True
+                                self.status.emit(
+                                    f"Error code {ret} requires manual power-cycle. Requesting manual power-cycle."
+                                )
+                                # emit a signal to ask the UI to prompt the user
+                                self._powercycle_ack = False
+                                self._waiting_for_powercycle = True
+                                try:
+                                    self.request_power_cycle.emit()
+                                    # wait for UI to update FPGA reference (ack) up to a timeout
+                                    wait_deadline = time.time() + 120.0
+                                    while time.time() < wait_deadline and not self._powercycle_ack:
+                                        time.sleep(0.5)
+                                    if not self._powercycle_ack:
+                                        raise RuntimeError(
+                                            f"Power-cycle requested for error {ret} but no power-cycle acknowledged"
+                                        )
+                                    else:
+                                        # reset attempts for this file and try again
+                                        attempt = 0
+                                        continue
+                                finally:
+                                    self._waiting_for_powercycle = False
                             # extend poll deadline to allow file to appear despite the code
                             poll_deadline = time.time() + (self.poll_timeout * 1.8)
                     except Exception as e:
                         error_text = str(e)
                         self.status.emit(f"Transfer attempt {attempt} raised: {error_text}")
-                        # try broad recovery routines (this also tells you which methods exist)
-                        recovered = _attempt_recovery()
-                        if recovered:
-                            self.status.emit(f"Recovery methods attempted: {', '.join(recovered)}")
+                        # If the exception message indicates a severe error (-4/-5),
+                        # treat it the same as a returned -4/-5: request manual power-cycle.
+                        if "-5" in error_text or "-4" in error_text:
+                            severe_error = True
+                            self.status.emit(
+                                f"Detected severe error in exception ({error_text}): requesting manual power-cycle."
+                            )
+                        # If a severe error was previously detected, don't try
+                        # the generic recovery routines (they don't help for -4/-5).
+                        if severe_error:
+                            self.status.emit(
+                                "Severe error detected previously: requesting manual power-cycle without attempting recovery methods."
+                            )
+                            # request manual power-cycle and wait for ack
+                            self._powercycle_ack = False
+                            self._waiting_for_powercycle = True
+                            try:
+                                self.request_power_cycle.emit()
+                                wait_deadline = time.time() + 120.0
+                                while time.time() < wait_deadline and not self._powercycle_ack:
+                                    time.sleep(0.5)
+                                if not self._powercycle_ack:
+                                    raise RuntimeError(
+                                        "Power-cycle requested but no power-cycle acknowledged"
+                                    )
+                                else:
+                                    attempt = 0
+                                    continue
+                            finally:
+                                self._waiting_for_powercycle = False
                         else:
-                            self.status.emit("No recovery methods available on FPGA instance")
+                            # try broad recovery routines (this also tells you which methods exist)
+                            recovered = _attempt_recovery()
+                            if recovered:
+                                self.status.emit(f"Recovery methods attempted: {', '.join(recovered)}")
+                            else:
+                                self.status.emit("No recovery methods available on FPGA instance")
                         # backoff before retry
-                        time.sleep(0.5 * attempt)
+                        time.sleep(0.1)
                         continue
 
                     # Poll for new file(s) by comparing before/after directory listings.
@@ -197,12 +272,34 @@ class ReaderWorker(QObject):
                         self.status.emit(
                             f"No new file detected for index {desired_index} after attempt {attempt}"
                         )
-                        recovered = _attempt_recovery()
-                        if not recovered:
-                            self.status.emit("No recovery methods available to call (post-poll)")
-                        time.sleep(0.5 * attempt)
+                        if severe_error:
+                            self.status.emit(
+                                "Severe error detected: skipping recovery methods and requesting manual power-cycle."
+                            )
+                            self._powercycle_ack = False
+                            self._waiting_for_powercycle = True
+                            try:
+                                self.request_power_cycle.emit()
+                                wait_deadline = time.time() + 120.0
+                                while time.time() < wait_deadline and not self._powercycle_ack:
+                                    time.sleep(0.5)
+                                if not self._powercycle_ack:
+                                    raise RuntimeError(
+                                        "Power-cycle requested but no power-cycle acknowledged"
+                                    )
+                                else:
+                                    attempt = 0
+                                    continue
+                            finally:
+                                self._waiting_for_powercycle = False
+                        else:
+                            recovered = _attempt_recovery()
+                            if not recovered:
+                                self.status.emit("No recovery methods available to call (post-poll)")
+                        time.sleep(0.5)
 
                 if not success:
+                    self.numFiles += 1
                     # After all recovery attempts failed, request a manual power-cycle from the user
                     self.status.emit(
                         f"Failed to capture file index {desired_index} after {self.max_retries} attempts. Requesting manual power-cycle."
@@ -311,10 +408,13 @@ class Ui(QMainWindow):
         self.CLK_CFGHigh.setText("3")
         self.CLK_CFGLow.setText("3")
 
+        self.ADCrange.addItem("12.5")
+        self.ADCrange.addItem("50.0")
         self.ADCrange.addItem("150.0")
         self.ADCrange.addItem("100.0")
-        self.ADCrange.addItem("50.0")
-        self.ADCrange.addItem("12.5")
+        
+        
+        
 
         self.edgeLeft.setText("156")
         self.edgeRight.setText("356")
@@ -613,7 +713,10 @@ class Ui(QMainWindow):
         FPGA instance back to the worker.
         """
         try:
-            # Block until the user clicks the explicit 'Device powered' button.
+            # Block until the user clicks the explicit 'Device powered' button
+            # or uses the optional 'Relay switch' to trigger a physical relay
+            # connected to an Arduino. The Relay switch button will attempt
+            # to send the ASCII character "1" to a detected serial device.
             while True:
                 msg = QMessageBox(self)
                 msg.setWindowTitle("Power-cycle required")
@@ -626,7 +729,65 @@ class Ui(QMainWindow):
                 # Only provide a single explicit button the user must press
                 msg.setStandardButtons(QMessageBox.NoButton)
                 btn = msg.addButton("Device powered", QMessageBox.AcceptRole)
+                # Add Relay switch button which will attempt to send '1' to
+                # a connected Arduino (via USB serial) to toggle a relay.
+                relay_btn = msg.addButton("Relay switch", QMessageBox.ActionRole)
                 msg.exec_()
+
+                # If the user pressed the Relay switch button, attempt to
+                # find the Arduino and send the command, then loop again so
+                # the user can confirm 'Device powered' when ready.
+                if msg.clickedButton() is relay_btn:
+                    try:
+                        if serial is None or serial_list_ports is None:
+                            self._handle_worker_status(
+                                "pyserial not available: cannot drive relay"
+                            )
+                        else:
+                            port = None
+                            try:
+                                ports = list(serial_list_ports.comports())
+                            except Exception:
+                                ports = []
+                            # heuristics: pick port with 'arduino' in description/hwid
+                            for p in ports:
+                                desc = (p.description or "").lower()
+                                hwid = (p.hwid or "").lower()
+                                if "arduino" in desc or "arduino" in hwid:
+                                    port = p.device
+                                    break
+                            # fallback: if only one port is present, use it
+                            if port is None and len(ports) == 1:
+                                port = ports[0].device
+
+                            if port is None:
+                                self._handle_worker_status(
+                                    "No Arduino-like serial device found to drive relay"
+                                )
+                            else:
+                                try:
+                                    baud = 9600
+                                    timeout = 1
+                                    s = serial.Serial(port, baudrate=baud, timeout=timeout)
+                                    # send ASCII '1' — device on the other side
+                                    s.write(b"1")
+                                    s.flush()
+                                    time.sleep(0.15)
+                                    s.close()
+                                    self._handle_worker_status(
+                                        f"Sent relay command to {port}"
+                                    )
+                                except Exception as e:
+                                    self._handle_worker_status(
+                                        f"Failed to send relay command to {port}: {e}"
+                                    )
+                    except Exception as e:
+                        # ensure any serial-related errors are logged but don't
+                        # break the dialog loop
+                        self._handle_worker_status(f"Relay switch error: {e}")
+                    # loop again so the user can either retry relay switch or
+                    # press the Device powered button when they have cycled power
+                    continue
 
                 # If the user pressed the explicit 'Device powered' button, continue.
                 if msg.clickedButton() is btn:
