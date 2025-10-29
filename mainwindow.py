@@ -1,6 +1,6 @@
 from PyQt5 import uic
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QThread, Qt
-from PyQt5.QtWidgets import QMainWindow, QFileDialog, QVBoxLayout, QMessageBox, QPushButton
+from PyQt5.QtWidgets import QMainWindow, QFileDialog, QVBoxLayout, QMessageBox, QPushButton, QCheckBox
 from tools import FPGAControl
 import pyqtgraph as pg
 import numpy as np
@@ -198,7 +198,7 @@ class ReaderWorker(QObject):
                                 try:
                                     self.request_power_cycle.emit()
                                     # wait for UI to update FPGA reference (ack) up to a timeout
-                                    wait_deadline = time.time() + 120.0
+                                    wait_deadline = time.time() + 500.0
                                     while time.time() < wait_deadline and not self._powercycle_ack:
                                         time.sleep(0.5)
                                     if not self._powercycle_ack:
@@ -234,7 +234,7 @@ class ReaderWorker(QObject):
                             self._waiting_for_powercycle = True
                             try:
                                 self.request_power_cycle.emit()
-                                wait_deadline = time.time() + 120.0
+                                wait_deadline = time.time() + 500.0
                                 while time.time() < wait_deadline and not self._powercycle_ack:
                                     time.sleep(0.5)
                                 if not self._powercycle_ack:
@@ -280,7 +280,7 @@ class ReaderWorker(QObject):
                             self._waiting_for_powercycle = True
                             try:
                                 self.request_power_cycle.emit()
-                                wait_deadline = time.time() + 120.0
+                                wait_deadline = time.time() + 500.0
                                 while time.time() < wait_deadline and not self._powercycle_ack:
                                     time.sleep(0.5)
                                 if not self._powercycle_ack:
@@ -310,7 +310,7 @@ class ReaderWorker(QObject):
                         self._waiting_for_powercycle = True
                         self.request_power_cycle.emit()
                         # wait for UI to update FPGA reference (ack) up to a timeout
-                        wait_deadline = time.time() + 120.0
+                        wait_deadline = time.time() + 500.0
                         while time.time() < wait_deadline and not self._powercycle_ack:
                             time.sleep(0.5)
                         if not self._powercycle_ack:
@@ -665,6 +665,25 @@ class Ui(QMainWindow):
             # non-fatal if UI element names differ
             pass
 
+        # Auto recover checkbox (default: checked)
+        try:
+            self.autoRecover = QCheckBox("Auto recover", self)
+            self.autoRecover.setChecked(True)
+            try:
+                # try to position next to the Stop button if available
+                sd_geo = self.stopRecording.geometry()
+                self.autoRecover.setGeometry(sd_geo.x() + sd_geo.width() + 10, sd_geo.y(), 120, sd_geo.height())
+            except Exception:
+                try:
+                    gd_geo = self.getData.geometry()
+                    self.autoRecover.setGeometry(gd_geo.x(), gd_geo.y() - 30, 120, gd_geo.height())
+                except Exception:
+                    self.autoRecover.move(10, 40)
+            self.autoRecover.show()
+        except Exception:
+            # ignore if UI layout doesn't allow it
+            pass
+
     def save_folder_path(self, max_length=40):
         path = QFileDialog.getExistingDirectory(self, "Select Folder")
         if len(path) > max_length:
@@ -769,8 +788,9 @@ class Ui(QMainWindow):
                                     baud = 9600
                                     timeout = 1
                                     s = serial.Serial(port, baudrate=baud, timeout=timeout)
+                                    time.sleep(2)
                                     # send ASCII '1' — device on the other side
-                                    s.write(b"1")
+                                    s.write(b'1')
                                     s.flush()
                                     time.sleep(0.15)
                                     s.close()
@@ -836,6 +856,100 @@ class Ui(QMainWindow):
         except Exception:
             # don't let UI errors stop worker
             pass
+
+    def _handle_request_power_cycle(self):
+        """Handle a worker power-cycle request: either auto-recover via Arduino
+        (send '1' and refresh) or fall back to the interactive dialog.
+        """
+        try:
+            if getattr(self, 'autoRecover', None) and self.autoRecover.isChecked():
+                # attempt automatic relay toggle via serial
+                try:
+                    if serial is None or serial_list_ports is None:
+                        self._handle_worker_status("pyserial not available: cannot auto-recover; opening dialog")
+                        self._prompt_power_cycle()
+                        return
+                    port = None
+                    try:
+                        ports = list(serial_list_ports.comports())
+                    except Exception:
+                        ports = []
+                    for p in ports:
+                        desc = (p.description or "").lower()
+                        hwid = (p.hwid or "").lower()
+                        if "arduino" in desc or "arduino" in hwid:
+                            port = p.device
+                            break
+                    if port is None and len(ports) == 1:
+                        port = ports[0].device
+
+                    if port is None:
+                        self._handle_worker_status("No Arduino-like serial device found to drive relay; opening dialog")
+                        self._prompt_power_cycle()
+                        return
+
+                    try:
+                        # Many Arduinos auto-reset when the serial port is opened.
+                        # Wait a short time after opening so the sketch can start.
+                        baud = 9600
+                        timeout = 1
+                        s = serial.Serial(port, baudrate=baud, timeout=timeout)
+                        time.sleep(2.0)
+                        # send ASCII '1' — device on the other side
+                        try:
+                            s.write(b"1")
+                        except TypeError:
+                            s.write("1".encode('ascii'))
+                        s.flush()
+                        s.close()
+                        self._handle_worker_status(f"Sent auto-recover relay command to {port}; waiting 5s")
+                    except Exception as e:
+                        self._handle_worker_status(f"Failed to send auto-recover to {port}: {e}")
+                        self._prompt_power_cycle()
+                        return
+
+                    # wait 5 seconds for device to power-cycle and re-enumerate
+                    time.sleep(5)
+
+                    # attempt to refresh registers and recreate FPGAControl instance
+                    try:
+                        self._handle_worker_status("Refreshing registers after auto-recover...")
+                        self.refresh_registers(is_startup=False)
+                    except Exception as e:
+                        self._handle_worker_status(f"Refresh after auto-recover failed: {e}")
+                        # fall back to interactive dialog
+                        self._prompt_power_cycle()
+                        return
+
+                    # update worker with new FPGA instance
+                    try:
+                        if hasattr(self, "worker") and self.worker is not None:
+                            try:
+                                self.worker.set_fpga(self.fpga)
+                                self._handle_worker_status("Updated worker with new FPGA instance after auto-recover")
+                            except Exception as e:
+                                self._handle_worker_status(f"Failed to update worker FPGA after auto-recover: {e}")
+                    except Exception:
+                        pass
+
+                    return
+                except Exception as e:
+                    self._handle_worker_status(f"Error in auto-recover flow: {e}")
+                    try:
+                        self._prompt_power_cycle()
+                    except Exception:
+                        pass
+                    return
+            else:
+                # interactive path
+                self._prompt_power_cycle()
+        except Exception as e:
+            # ensure no exception escapes
+            self._handle_worker_status(f"Error handling power-cycle request: {e}")
+            try:
+                self._prompt_power_cycle()
+            except Exception:
+                pass
 
     def update_registers(self, is_startup=False):
         try:
@@ -908,13 +1022,13 @@ class Ui(QMainWindow):
         if self.fpga:
             try:
                 # perform an extra refresh before measurement to ensure device state
-                try:
-                    self._handle_worker_status("Refreshing FPGA before measurement...")
-                    self.fpga.refresh()
-                except Exception as e:
-                    self._handle_worker_status(f"FPGA refresh before measurement failed: {e}")
-                    self.statusBar().showMessage(f"FPGA refresh failed: {e}")
-                    return
+               # try:
+                #    self._handle_worker_status("Refreshing FPGA before measurement...")
+                 #   self.fpga.refresh()
+                #except Exception as e:
+                 #   self._handle_worker_status(f"FPGA refresh before measurement failed: {e}")
+                  #  self.statusBar().showMessage(f"FPGA refresh failed: {e}")
+                   # return
 
                 numFiles = int(self.nFiles.text())
                 if numFiles <= 0:
@@ -946,8 +1060,8 @@ class Ui(QMainWindow):
                 self.worker.progress.connect(self.progressBar.setValue)
                 # route worker status messages to the combined handler (status bar + console + file)
                 self.worker.status.connect(self._handle_worker_status)
-                # if worker asks for power-cycle, prompt the user
-                self.worker.request_power_cycle.connect(self._prompt_power_cycle)
+                # if worker asks for power-cycle, handle either auto-recover or prompt the user
+                self.worker.request_power_cycle.connect(self._handle_request_power_cycle)
                 # allow UI to push back an updated FPGA instance to the worker
                 self.worker.set_fpga = self.worker.set_fpga
                 self.worker.finished.connect(self.thread.quit)
