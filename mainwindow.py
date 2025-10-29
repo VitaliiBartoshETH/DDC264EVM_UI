@@ -1,6 +1,6 @@
 from PyQt5 import uic
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QThread, Qt
-from PyQt5.QtWidgets import QMainWindow, QFileDialog, QVBoxLayout, QMessageBox, QPushButton, QCheckBox
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QThread, Qt, QTimer
+from PyQt5.QtWidgets import QMainWindow, QFileDialog, QVBoxLayout, QMessageBox, QPushButton, QCheckBox, QDialog, QLabel, QGridLayout
 from tools import FPGAControl
 import pyqtgraph as pg
 import numpy as np
@@ -646,43 +646,231 @@ class Ui(QMainWindow):
 
         self.show()
 
-        # Create a Stop button placed next to the Get Data button (created by the .ui)
+        # Create Stop button and Auto recover checkbox and insert them into
+        # the same layout as the Get Data button so they behave like other
+        # controls when the window is resized.
         try:
-            # create button and place it right to the existing GetData button
             self.stopRecording = QPushButton("Stop", self)
-            try:
-                gd_geo = self.getData.geometry()
-                # position to the right with a small gap
-                x = gd_geo.x() 
-                y = gd_geo.y() - gd_geo.height() - 10
-                self.stopRecording.setGeometry(x, y, gd_geo.width(), gd_geo.height())
-            except Exception:
-                # fallback: place at fixed coordinates
-                self.stopRecording.move(10, 10)
             self.stopRecording.clicked.connect(self._on_stop_clicked)
-            self.stopRecording.show()
-        except Exception:
-            # non-fatal if UI element names differ
-            pass
-
-        # Auto recover checkbox (default: checked)
-        try:
             self.autoRecover = QCheckBox("Auto recover", self)
             self.autoRecover.setChecked(True)
+
+            # Try to find the layout that holds getData and insert both
+            parent = None
             try:
-                # try to position next to the Stop button if available
-                sd_geo = self.stopRecording.geometry()
-                self.autoRecover.setGeometry(sd_geo.x() + sd_geo.width() + 10, sd_geo.y(), 120, sd_geo.height())
+                parent = self.getData.parentWidget() or self.getData.parent()
             except Exception:
+                parent = None
+
+            layout = None
+            try:
+                if parent is not None:
+                    layout = parent.layout()
+            except Exception:
+                layout = None
+
+            placed_stop = False
+            placed_auto = False
+
+            if layout is not None:
                 try:
-                    gd_geo = self.getData.geometry()
-                    self.autoRecover.setGeometry(gd_geo.x(), gd_geo.y() - 30, 120, gd_geo.height())
+                    if isinstance(layout, QGridLayout):
+                        # find getData position
+                        gd_pos = None
+                        for r in range(layout.rowCount()):
+                            for c in range(layout.columnCount()):
+                                item = layout.itemAtPosition(r, c)
+                                if item and item.widget() is self.getData:
+                                    gd_pos = (r, c)
+                                    break
+                            if gd_pos:
+                                break
+                        if gd_pos:
+                            r, c = gd_pos
+                            # Place Stop to the right if possible
+                            try:
+                                if layout.itemAtPosition(r, c + 1) is None:
+                                    layout.addWidget(self.stopRecording, r, c + 1)
+                                else:
+                                    # try next column
+                                    layout.addWidget(self.stopRecording, r, c + 2)
+                                placed_stop = True
+                            except Exception:
+                                try:
+                                    layout.addWidget(self.stopRecording)
+                                    placed_stop = True
+                                except Exception:
+                                    placed_stop = False
+
+                            # Prefer to place autoRecover ABOVE getData
+                            try:
+                                placed = False
+                                if r > 0 and layout.itemAtPosition(r - 1, c) is None:
+                                    layout.addWidget(self.autoRecover, r - 1, c)
+                                    placed = True
+                                elif layout.itemAtPosition(r, c - 1) is None:
+                                    layout.addWidget(self.autoRecover, r, c - 1)
+                                    placed = True
+                                else:
+                                    # fallback: try below or next to stop
+                                    if layout.itemAtPosition(r + 1, c) is None:
+                                        layout.addWidget(self.autoRecover, r + 1, c)
+                                        placed = True
+                                    elif layout.itemAtPosition(r, c + 2) is None:
+                                        layout.addWidget(self.autoRecover, r, c + 2)
+                                        placed = True
+                                if placed:
+                                    placed_auto = True
+                                else:
+                                    layout.addWidget(self.autoRecover)
+                                    placed_auto = True
+                            except Exception:
+                                try:
+                                    layout.addWidget(self.autoRecover)
+                                    placed_auto = True
+                                except Exception:
+                                    placed_auto = False
+                    else:
+                        # Box/layouts: insert autoRecover BEFORE getData (above)
+                        try:
+                            idx = layout.indexOf(self.getData)
+                            if idx != -1:
+                                layout.insertWidget(idx + 1, self.stopRecording)
+                                # insert autoRecover before getData so it appears above
+                                layout.insertWidget(idx, self.autoRecover)
+                                placed_stop = placed_auto = True
+                            else:
+                                layout.addWidget(self.autoRecover)
+                                layout.addWidget(self.stopRecording)
+                                placed_stop = placed_auto = True
+                        except Exception:
+                            try:
+                                layout.addWidget(self.autoRecover)
+                                layout.addWidget(self.stopRecording)
+                                placed_stop = placed_auto = True
+                            except Exception:
+                                placed_stop = placed_auto = False
                 except Exception:
-                    self.autoRecover.move(10, 40)
-            self.autoRecover.show()
+                    # layout insert failed; will fallback to main_layout
+                    placed_stop = placed_auto = False
+
+            if not placed_stop or not placed_auto:
+                # try adding to the central widget layout
+                try:
+                    main_layout = self.centralWidget().layout()
+                    if main_layout is not None:
+                        if not placed_stop:
+                            main_layout.addWidget(self.stopRecording)
+                            placed_stop = True
+                        if not placed_auto:
+                            main_layout.addWidget(self.autoRecover)
+                            placed_auto = True
+                except Exception:
+                    pass
+
+            # As last resort, show them so they're usable even without layout
+            if not placed_stop:
+                try:
+                    self.stopRecording.show()
+                except Exception:
+                    pass
+            if not placed_auto:
+                try:
+                    self.autoRecover.show()
+                except Exception:
+                    pass
+
         except Exception:
-            # ignore if UI layout doesn't allow it
+            # Non-fatal; UI will still operate albeit without these controls
             pass
+
+    def _position_auto_recover(self):
+        """Position the autoRecover checkbox at the bottom-right corner.
+
+        The checkbox will match the size of the `getData` button if present,
+        otherwise `stopRecording`, otherwise a sensible default.
+        """
+        try:
+            if not getattr(self, 'autoRecover', None):
+                return
+
+            # Reference button to copy size from
+            ref = getattr(self, 'getData', None) 
+            if ref and hasattr(ref, 'width'):
+                w = ref.width()
+                h = ref.height()
+            else:
+                w = 120
+                h = 28
+
+            margin = 10
+            # place inside the main window (self)
+            total_w = self.width()
+            total_h = self.height()
+            x = max(margin, total_w - w - margin)
+            y = max(margin, total_h - h - margin)
+            # avoid overlapping the Build image button if present
+            try:
+                build_btn = getattr(self, 'buildImage', None)
+                if build_btn is not None:
+                    try:
+                        bgeo = build_btn.geometry()
+                        bx, by, bw, bh = bgeo.x(), bgeo.y(), bgeo.width(), bgeo.height()
+                        # check if the default position would overlap the build button
+                        intersects = (x < bx + bw and x + w > bx and y < by + bh and y + h > by)
+                        if intersects:
+                            # Preferred: place BELOW the build button if space allows
+                            new_y = by + bh + margin
+                            if new_y + h <= total_h - margin:
+                                y = new_y
+                                # keep x aligned to build button's left where possible
+                                if bx + bw - w >= margin:
+                                    x = bx + bw - w
+                            else:
+                                # Try to place to the RIGHT of the build button
+                                new_x = bx + bw + margin
+                                if new_x + w <= total_w - margin:
+                                    x = new_x
+                                    # keep y near build button top if possible
+                                    if by + h <= total_h - margin:
+                                        y = by
+                                else:
+                                    # fallback: place to the LEFT of the build button
+                                    new_x = bx - w - margin
+                                    if new_x >= margin:
+                                        x = new_x
+                                        y = by
+                                    else:
+                                        # last resort: place above the build button
+                                        new_y2 = by - h - margin
+                                        if new_y2 >= margin:
+                                            y = new_y2
+                                        else:
+                                            # if nothing fits, nudge to keep inside window
+                                            x = max(margin, min(x, total_w - w - margin))
+                                            y = max(margin, min(y, total_h - h - margin))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            try:
+                self.autoRecover.setGeometry(x, y, w, h)
+            except Exception:
+                self.autoRecover.move(x, y)
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        # Let the layout manager handle positions/sizes for widgets we
+        # inserted into layouts (stopRecording and autoRecover). Just call
+        # the base implementation to allow normal resizing behaviour.
+        try:
+            super().resizeEvent(event)
+        except Exception:
+            try:
+                QMainWindow.resizeEvent(self, event)
+            except Exception:
+                pass
 
     def save_folder_path(self, max_length=40):
         path = QFileDialog.getExistingDirectory(self, "Select Folder")
@@ -903,8 +1091,16 @@ class Ui(QMainWindow):
                         s.flush()
                         s.close()
                         self._handle_worker_status(f"Sent auto-recover relay command to {port}; waiting 5s")
+                        try:
+                            self._show_notification("Auto recover", f"Sent relay command to {port}; waiting 5s", timeout=3000)
+                        except Exception:
+                            pass
                     except Exception as e:
                         self._handle_worker_status(f"Failed to send auto-recover to {port}: {e}")
+                        try:
+                            self._show_notification("Auto recover failed", f"Failed to send to {port}: {e}", timeout=5000)
+                        except Exception:
+                            pass
                         self._prompt_power_cycle()
                         return
 
@@ -915,8 +1111,16 @@ class Ui(QMainWindow):
                     try:
                         self._handle_worker_status("Refreshing registers after auto-recover...")
                         self.refresh_registers(is_startup=False)
+                        try:
+                            self._show_notification("Auto recover", "Refresh completed after auto-recover", timeout=3000)
+                        except Exception:
+                            pass
                     except Exception as e:
                         self._handle_worker_status(f"Refresh after auto-recover failed: {e}")
+                        try:
+                            self._show_notification("Auto recover failed", f"Refresh failed: {e}", timeout=5000)
+                        except Exception:
+                            pass
                         # fall back to interactive dialog
                         self._prompt_power_cycle()
                         return
@@ -927,6 +1131,10 @@ class Ui(QMainWindow):
                             try:
                                 self.worker.set_fpga(self.fpga)
                                 self._handle_worker_status("Updated worker with new FPGA instance after auto-recover")
+                                try:
+                                    self._show_notification("Auto recover", "Auto-recover succeeded; worker updated", timeout=3000)
+                                except Exception:
+                                    pass
                             except Exception as e:
                                 self._handle_worker_status(f"Failed to update worker FPGA after auto-recover: {e}")
                     except Exception:
@@ -948,6 +1156,32 @@ class Ui(QMainWindow):
             self._handle_worker_status(f"Error handling power-cycle request: {e}")
             try:
                 self._prompt_power_cycle()
+            except Exception:
+                pass
+
+    def _show_notification(self, title: str, message: str, timeout: int = 3000):
+        """Show a small, non-modal popup notification independent of the main window.
+
+        The popup auto-closes after `timeout` milliseconds.
+        """
+        try:
+            dlg = QDialog(self)
+            # Keep it as a tool window so it doesn't take focus from main window
+            dlg.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint)
+            dlg.setWindowTitle(title)
+            layout = QVBoxLayout(dlg)
+            lbl = QLabel(message, dlg)
+            lbl.setWordWrap(True)
+            layout.addWidget(lbl)
+            dlg.setLayout(layout)
+            dlg.setModal(False)
+            dlg.show()
+            # auto-close after timeout
+            QTimer.singleShot(timeout, dlg.close)
+        except Exception:
+            # fallback: log status
+            try:
+                self._handle_worker_status(f"{title}: {message}")
             except Exception:
                 pass
 
