@@ -860,6 +860,49 @@ class Ui(QMainWindow):
         except Exception:
             pass
 
+    def _find_arduino_port(self):
+        """Return a serial device path for the Arduino if found.
+
+        Detection order:
+        1) Match VID=0x2341 and PID=0x0058 (preferred)
+        2) Match "arduino" in description or hwid (existing heuristic)
+        3) If only one serial port present, return it as a last resort
+        Returns device string (e.g. 'COM3') or None.
+        """
+        try:
+            if serial is None or serial_list_ports is None:
+                return None
+            try:
+                ports = list(serial_list_ports.comports())
+            except Exception:
+                ports = []
+
+            # 1) VID/PID match for official Arduino Nano (VID 0x2341, PID 0x0058)
+            for p in ports:
+                try:
+                    if getattr(p, 'vid', None) == 0x2341 and getattr(p, 'pid', None) == 0x0058:
+                        return p.device
+                except Exception:
+                    pass
+
+            # 2) existing heuristic: look for 'arduino' in description/hwid
+            for p in ports:
+                try:
+                    desc = (p.description or "").lower()
+                    hwid = (p.hwid or "").lower()
+                    if 'arduino' in desc or 'arduino' in hwid:
+                        return p.device
+                except Exception:
+                    pass
+
+            # 3) fallback: if exactly one candidate USB-serial port is present
+            if len(ports) == 1:
+                return ports[0].device
+
+            return None
+        except Exception:
+            return None
+
     def resizeEvent(self, event):
         # Let the layout manager handle positions/sizes for widgets we
         # inserted into layouts (stopRecording and autoRecover). Just call
@@ -951,21 +994,9 @@ class Ui(QMainWindow):
                                 "pyserial not available: cannot drive relay"
                             )
                         else:
-                            port = None
-                            try:
-                                ports = list(serial_list_ports.comports())
-                            except Exception:
-                                ports = []
-                            # heuristics: pick port with 'arduino' in description/hwid
-                            for p in ports:
-                                desc = (p.description or "").lower()
-                                hwid = (p.hwid or "").lower()
-                                if "arduino" in desc or "arduino" in hwid:
-                                    port = p.device
-                                    break
-                            # fallback: if only one port is present, use it
-                            if port is None and len(ports) == 1:
-                                port = ports[0].device
+                            # Prefer VID/PID detection for Nano, then fall back to
+                            # the existing heuristics.
+                            port = self._find_arduino_port()
 
                             if port is None:
                                 self._handle_worker_status(
@@ -1057,19 +1088,9 @@ class Ui(QMainWindow):
                         self._handle_worker_status("pyserial not available: cannot auto-recover; opening dialog")
                         self._prompt_power_cycle()
                         return
-                    port = None
-                    try:
-                        ports = list(serial_list_ports.comports())
-                    except Exception:
-                        ports = []
-                    for p in ports:
-                        desc = (p.description or "").lower()
-                        hwid = (p.hwid or "").lower()
-                        if "arduino" in desc or "arduino" in hwid:
-                            port = p.device
-                            break
-                    if port is None and len(ports) == 1:
-                        port = ports[0].device
+                    # Prefer VID/PID detection for Nano, then fall back to
+                    # the existing heuristics.
+                    port = self._find_arduino_port()
 
                     if port is None:
                         self._handle_worker_status("No Arduino-like serial device found to drive relay; opening dialog")
