@@ -1,0 +1,9 @@
+{"command":"go", "steps":200, "direction":"CW"}
+{"command":"go", "steps":200, "direction":"CCW"}
+{"command":"go", "degrees":90, "direction":"CW"}
+{"command":"go", "degrees":90, "direction":"CCW"}
+{"command":"stop"}
+{"command":"status"}
+{"command":"disable_motor"}
+{"command":"enable_motor"}
+

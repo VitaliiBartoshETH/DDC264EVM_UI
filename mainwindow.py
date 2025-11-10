@@ -1,12 +1,15 @@
 from PyQt5 import uic
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QThread, Qt, QTimer
-from PyQt5.QtWidgets import QMainWindow, QFileDialog, QVBoxLayout, QMessageBox, QPushButton, QCheckBox, QDialog, QLabel, QGridLayout
+from PyQt5.QtWidgets import QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QMessageBox, QPushButton, QCheckBox, QDialog, QLabel, QGridLayout, QLineEdit, QWidget
 from tools import FPGAControl
+from rotational_control import RotationalController
 import pyqtgraph as pg
 import numpy as np
 import os
+import sys
 import time
 import datetime
+import json
 # Optional serial support for Arduino relay switching. Import is guarded so
 # the app continues to work if pyserial is not installed in the environment.
 try:
@@ -23,6 +26,8 @@ class ReaderWorker(QObject):
     status = pyqtSignal(str)
     # request the user to power-cycle the device (UI should prompt the user)
     request_power_cycle = pyqtSignal()
+    # signal emitted after each file is saved (for live plot updates)
+    file_saved = pyqtSignal(str)  # emits the file path
 
     def __init__(
         self, fpga, folder_path, file_name, numFiles, max_retries=1, poll_timeout=1.0
@@ -330,6 +335,11 @@ class ReaderWorker(QObject):
                     f"File {last_saved_index} saved successfully as {saved_name}"
                 )
                 self.progress.emit(i + 1)
+                
+                # Emit file_saved signal for live plot updates
+                saved_path = os.path.join(self.folder_path, saved_name)
+                self.file_saved.emit(saved_path)
+                
                 # if user requested stop, break after successfully saving this file
                 if getattr(self, "_stop_requested", False):
                     self.status.emit("Worker: stopping after current file due to stop request")
@@ -413,6 +423,12 @@ class Ui(QMainWindow):
         self.ADCrange.addItem("150.0")
         self.ADCrange.addItem("100.0")
         
+        # Initialize normalization dropdown with 4 modes
+        self.useNormalization.addItem("none")
+        self.useNormalization.addItem("full leakage/flat-field")
+        self.useNormalization.addItem("leakage/flat-field from open beam")
+        self.useNormalization.addItem("flat-field only")
+        self.useNormalization.setCurrentText("none")
         
         
 
@@ -432,6 +448,12 @@ class Ui(QMainWindow):
         self.imageUpperScale.setText("1")
         self.mixLowScale.setText("0")
         self.mixUpperScale.setText("1")
+        
+        # Track whether user has manually edited scale fields
+        self.imageLowScale_manual = False
+        self.imageUpperScale_manual = False
+        self.mixLowScale_manual = False
+        self.mixUpperScale_manual = False
 
         public_documents = os.path.join(
             os.environ.get("PUBLIC", r"C:\Users\Public"), "Documents"
@@ -470,6 +492,29 @@ class Ui(QMainWindow):
             ax = plotItem.getAxis(axis)
             ax.setPen(pg.mkPen('k', width=1))
             ax.setTextPen(pg.mkPen('k'))
+        
+        # Add Auto update checkbox for live trace plot updates
+        self.autoUpdateTrace = QCheckBox("Auto update", self)
+        self.autoUpdateTrace.setChecked(False)
+        try:
+            # Add it to horizontalLayout_23 (same line as File Path button and traceNumber)
+            if hasattr(self, 'horizontalLayout_23'):
+                # Remove the spacer to make room for the checkbox
+                spacer_to_remove = None
+                for i in range(self.horizontalLayout_23.count()):
+                    item = self.horizontalLayout_23.itemAt(i)
+                    if item and item.spacerItem():
+                        spacer_to_remove = item
+                        break
+                if spacer_to_remove:
+                    self.horizontalLayout_23.removeItem(spacer_to_remove)
+                
+                # Add stretch to push checkbox to the right
+                self.horizontalLayout_23.addStretch()
+                # Add Auto update checkbox aligned to the right
+                self.horizontalLayout_23.addWidget(self.autoUpdateTrace, alignment=Qt.AlignRight)
+        except Exception:
+            pass
 
         self.imageWidget = pg.GraphicsLayoutWidget()
         # Try to make the GraphicsLayoutWidget background transparent so
@@ -606,6 +651,7 @@ class Ui(QMainWindow):
         self.image_data = np.zeros((16, 16))
         self.dark_current_data = np.zeros((16, 16))
         self.open_beam_data = np.zeros((16, 16))
+        self.open_beam_baseline = np.zeros((16, 16))  # Store open beam baseline for mode 3
         self.readFilePath.setText("")
 
         self.openBeam.setChecked(False)
@@ -635,10 +681,47 @@ class Ui(QMainWindow):
         )
         self.decoderMatrix.clicked.connect(self.load_decoder_matrix)
         self.buildImage.clicked.connect(self.build_image)
+        
+        # Add Auto update checkbox for live image updates (shared for both images)
+        # Place it in the same row as the Build image button (before it)
+        self.autoUpdateImages = QCheckBox("Auto update images", self)
+        self.autoUpdateImages.setChecked(False)
+        try:
+            # Access the horizontalLayout_21 that contains the buildImage button
+            if hasattr(self, 'horizontalLayout_21'):
+                # Find the index of buildImage button
+                build_index = -1
+                for i in range(self.horizontalLayout_21.count()):
+                    item = self.horizontalLayout_21.itemAt(i)
+                    if item and item.widget() is self.buildImage:
+                        build_index = i
+                        break
+                
+                # Insert checkbox before buildImage button
+                if build_index >= 0:
+                    self.horizontalLayout_21.insertWidget(build_index, self.autoUpdateImages)
+                else:
+                    # Fallback: add at end
+                    self.horizontalLayout_21.addWidget(self.autoUpdateImages)
+            else:
+                # Fallback: try to get parent layout
+                build_layout = self.buildImage.parent().layout()
+                if build_layout:
+                    build_layout.addWidget(self.autoUpdateImages)
+        except Exception as e:
+            pass
+        
         self.imageUpperScale.textChanged.connect(self.change_scales)
         self.imageLowScale.textChanged.connect(self.change_scales)
         self.mixUpperScale.textChanged.connect(self.change_scales)
         self.mixLowScale.textChanged.connect(self.change_scales)
+        
+        # Track manual edits to scale fields
+        self.imageUpperScale.textEdited.connect(lambda: setattr(self, 'imageUpperScale_manual', True))
+        self.imageLowScale.textEdited.connect(lambda: setattr(self, 'imageLowScale_manual', True))
+        self.mixUpperScale.textEdited.connect(lambda: setattr(self, 'mixUpperScale_manual', True))
+        self.mixLowScale.textEdited.connect(lambda: setattr(self, 'mixLowScale_manual', True))
+        
         self.darkCurrent.toggled.connect(self.build_image)
         self.openBeam.toggled.connect(self.build_image)
         self.openBeam.clicked.connect(self.build_image)
@@ -646,14 +729,61 @@ class Ui(QMainWindow):
 
         self.show()
 
+        # Style the Get Data button (green) and Stop button (red)
+        try:
+            self.getData.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        except Exception:
+            pass
+
         # Create Stop button and Auto recover checkbox and insert them into
         # the same layout as the Get Data button so they behave like other
         # controls when the window is resized.
         try:
             self.stopRecording = QPushButton("Stop", self)
             self.stopRecording.clicked.connect(self._on_stop_clicked)
+            self.stopRecording.setStyleSheet("background-color: #DC143C; color: white; font-weight: bold;")
             self.autoRecover = QCheckBox("Auto recover", self)
             self.autoRecover.setChecked(True)
+
+            # Rotation controls: checkbox + number of angles + HOME button
+            self.rotationCheckbox = QCheckBox("Rotation", self)
+            self.rotationCheckbox.setChecked(False)
+            # numeric input for number of angles (per full rotation)
+            self.angleNum = QLineEdit(self)
+            self.angleNum.setText("4")
+            self.angleNum.setFixedWidth(48)
+            # HOME button to send home command to Arduino
+            self.homeButton = QPushButton("HOME", self)
+            self.homeButton.clicked.connect(self._on_home_clicked)
+            self.homeButton.setStyleSheet("background-color: red; color: white; font-weight: bold;")
+            self.homeButton.setFixedWidth(60)
+            # Custom angle button and input to go to absolute position
+            self.customAngleButton = QPushButton("Custom angle", self)
+            self.customAngleButton.clicked.connect(self._on_custom_angle_clicked)
+            self.customAngleButton.setStyleSheet("background-color: blue; color: white; font-weight: bold;")
+            self.customAngleButton.setFixedWidth(100)
+            self.customAngleInput = QLineEdit(self)
+            self.customAngleInput.setText("0")
+            self.customAngleInput.setFixedWidth(48)
+            # Set HOME button to set current position as home (zero)
+            self.setHomeButton = QPushButton("Set HOME", self)
+            self.setHomeButton.clicked.connect(self._on_set_home_clicked)
+            self.setHomeButton.setStyleSheet("background-color: black; color: white; font-weight: bold;")
+            self.setHomeButton.setFixedWidth(80)
+
+            # Create a horizontal layout container for all stepper motor controls
+            self.stepperControlWidget = QWidget(self)
+            self.stepperControlLayout = QHBoxLayout(self.stepperControlWidget)
+            self.stepperControlLayout.setContentsMargins(0, 0, 0, 0)
+            self.stepperControlLayout.setSpacing(5)
+            # Add widgets in order: Rotation checkbox, angleNum, HOME, Custom angle, customAngleInput, Set HOME
+            self.stepperControlLayout.addWidget(self.rotationCheckbox)
+            self.stepperControlLayout.addWidget(self.angleNum)
+            self.stepperControlLayout.addWidget(self.homeButton)
+            self.stepperControlLayout.addWidget(self.customAngleButton)
+            self.stepperControlLayout.addWidget(self.customAngleInput)
+            self.stepperControlLayout.addStretch()  # Add stretch to push Set HOME to the right
+            self.stepperControlLayout.addWidget(self.setHomeButton, alignment=Qt.AlignRight)
 
             # Try to find the layout that holds getData and insert both
             parent = None
@@ -672,10 +802,32 @@ class Ui(QMainWindow):
             placed_stop = False
             placed_auto = False
 
+            # Place Auto recover checkbox next to Filename field (in horizontalLayout_25)
+            try:
+                # Access horizontalLayout_25 directly by name
+                if hasattr(self, 'horizontalLayout_25'):
+                    # Remove the spacer to make room for the checkbox
+                    spacer_to_remove = None
+                    for i in range(self.horizontalLayout_25.count()):
+                        item = self.horizontalLayout_25.itemAt(i)
+                        if item and item.spacerItem():
+                            spacer_to_remove = item
+                            break
+                    if spacer_to_remove:
+                        self.horizontalLayout_25.removeItem(spacer_to_remove)
+                    
+                    # Add stretch first to push checkbox to the right
+                    self.horizontalLayout_25.addStretch()
+                    # Add Auto recover checkbox aligned to the right
+                    self.horizontalLayout_25.addWidget(self.autoRecover, alignment=Qt.AlignRight)
+                    placed_auto = True
+            except Exception as e:
+                pass
+
             if layout is not None:
                 try:
                     if isinstance(layout, QGridLayout):
-                        # find getData position
+                        # find getData position in the grid
                         gd_pos = None
                         for r in range(layout.rowCount()):
                             for c in range(layout.columnCount()):
@@ -687,12 +839,12 @@ class Ui(QMainWindow):
                                 break
                         if gd_pos:
                             r, c = gd_pos
-                            # Place Stop to the right if possible
+                            
+                            # Place Stop button to the right of getData
                             try:
                                 if layout.itemAtPosition(r, c + 1) is None:
                                     layout.addWidget(self.stopRecording, r, c + 1)
                                 else:
-                                    # try next column
                                     layout.addWidget(self.stopRecording, r, c + 2)
                                 placed_stop = True
                             except Exception:
@@ -701,44 +853,38 @@ class Ui(QMainWindow):
                                     placed_stop = True
                                 except Exception:
                                     placed_stop = False
-
-                            # Prefer to place autoRecover ABOVE getData
-                            try:
-                                placed = False
-                                if r > 0 and layout.itemAtPosition(r - 1, c) is None:
-                                    layout.addWidget(self.autoRecover, r - 1, c)
-                                    placed = True
-                                elif layout.itemAtPosition(r, c - 1) is None:
-                                    layout.addWidget(self.autoRecover, r, c - 1)
-                                    placed = True
-                                else:
-                                    # fallback: try below or next to stop
-                                    if layout.itemAtPosition(r + 1, c) is None:
-                                        layout.addWidget(self.autoRecover, r + 1, c)
-                                        placed = True
-                                    elif layout.itemAtPosition(r, c + 2) is None:
-                                        layout.addWidget(self.autoRecover, r, c + 2)
-                                        placed = True
-                                if placed:
-                                    placed_auto = True
-                                else:
-                                    layout.addWidget(self.autoRecover)
-                                    placed_auto = True
-                            except Exception:
-                                try:
-                                    layout.addWidget(self.autoRecover)
-                                    placed_auto = True
-                                except Exception:
-                                    placed_auto = False
                     else:
-                        # Box/layouts: insert autoRecover BEFORE getData (above)
+                        # Box/layouts: We need to find which layout item contains getData
+                        # and insert autoRecover before that item
                         try:
-                            idx = layout.indexOf(self.getData)
-                            if idx != -1:
-                                layout.insertWidget(idx + 1, self.stopRecording)
-                                # insert autoRecover before getData so it appears above
-                                layout.insertWidget(idx, self.autoRecover)
-                                placed_stop = placed_auto = True
+                            # getData is inside horizontalLayout_17, we need to find that layout in the parent
+                            getData_parent_layout = self.getData.parent().layout() if self.getData.parent() else None
+                            if getData_parent_layout and layout:
+                                # Find the index of the layout that contains getData
+                                idx = -1
+                                for i in range(layout.count()):
+                                    item = layout.itemAt(i)
+                                    if item and item.layout() == getData_parent_layout:
+                                        idx = i
+                                        break
+                                
+                                if idx != -1:
+                                    # Insert autoRecover in a horizontal layout before getData's row
+                                    autoRecoverLayout = QHBoxLayout()
+                                    autoRecoverLayout.addWidget(self.autoRecover)
+                                    autoRecoverLayout.addStretch()
+                                    layout.insertLayout(idx, autoRecoverLayout)
+                                    placed_auto = True
+                                    
+                                    # Add Stop button to the same row as getData
+                                    if getData_parent_layout:
+                                        getData_parent_layout.addWidget(self.stopRecording)
+                                        placed_stop = True
+                                else:
+                                    # Fallback
+                                    layout.addWidget(self.autoRecover)
+                                    layout.addWidget(self.stopRecording)
+                                    placed_stop = placed_auto = True
                             else:
                                 layout.addWidget(self.autoRecover)
                                 layout.addWidget(self.stopRecording)
@@ -765,6 +911,11 @@ class Ui(QMainWindow):
                         if not placed_auto:
                             main_layout.addWidget(self.autoRecover)
                             placed_auto = True
+                        # Add the stepper control container widget as a single row
+                        try:
+                            main_layout.addWidget(self.stepperControlWidget)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
@@ -779,9 +930,32 @@ class Ui(QMainWindow):
                     self.autoRecover.show()
                 except Exception:
                     pass
+            # ensure rotation controls are visible if placement failed
+            try:
+                if not getattr(self, 'stepperControlWidget', None):
+                    pass
+                else:
+                    self.stepperControlWidget.show()
+            except Exception:
+                pass
 
         except Exception:
             # Non-fatal; UI will still operate albeit without these controls
+            pass
+
+        # If Rotation checkbox is ON at startup, enable the motor on the Arduino
+        try:
+            if getattr(self, 'rotationCheckbox', None) and self.rotationCheckbox.isChecked():
+                try:
+                    self._handle_worker_status("Enabling motor at startup...")
+                    success, responses, error = self._send_arduino_command({"command": "enable_motor"}, timeout=3.0)
+                    if success:
+                        self._handle_worker_status("Motor enabled successfully at startup")
+                    else:
+                        self._handle_worker_status(f"Failed to enable motor at startup: {error}")
+                except Exception as e:
+                    self._handle_worker_status(f"Failed to enable rotation motor at startup: {e}")
+        except Exception:
             pass
 
     def _position_auto_recover(self):
@@ -903,6 +1077,84 @@ class Ui(QMainWindow):
         except Exception:
             return None
 
+    def _send_power_cycle_command(self):
+        """Send power cycle command to Arduino using JSON protocol with robust port detection.
+        
+        Waits for Arduino to complete the power cycle and send confirmation response.
+        
+        Returns:
+            Tuple of (success: bool, error_msg: str or None)
+        """
+        try:
+            if serial is None or serial_list_ports is None:
+                return (False, "pyserial not available")
+            
+            # Use the robust Arduino port detection
+            port = self._find_arduino_port()
+            
+            if port is None:
+                return (False, "No Arduino-like serial device found")
+            
+            try:
+                # Open serial connection with proper settings for Arduino
+                baud = 115200  # Match stepper motor controller baud rate
+                timeout = 5  # Increased timeout to wait for relay operation
+                s = serial.Serial(port, baudrate=baud, timeout=timeout)
+                time.sleep(2.0)  # Wait for Arduino reset after serial open
+                
+                # Send JSON command for power cycle
+                command = {"command": "power cycle"}
+                cmd_json = json.dumps(command) + "\n"
+                self._handle_worker_status(f"→ Arduino ({port}): {cmd_json.strip()}")
+                
+                s.write(cmd_json.encode('utf-8'))
+                s.flush()
+                
+                # Wait for both responses from Arduino:
+                # 1. "Triggering power cycle relay"
+                # 2. "Power cycle relay triggered" (completion confirmation)
+                responses_received = 0
+                completion_confirmed = False
+                start_time = time.time()
+                max_wait = 5.0  # Maximum 5 seconds to wait for completion
+                
+                while time.time() - start_time < max_wait and not completion_confirmed:
+                    try:
+                        if s.in_waiting > 0:
+                            response = s.readline().decode('utf-8', errors='ignore').strip()
+                            if response:
+                                self._handle_worker_status(f"← Arduino: {response}")
+                                responses_received += 1
+                                
+                                # Check if this is the completion message
+                                try:
+                                    resp_json = json.loads(response)
+                                    if resp_json.get("msg") == "Power cycle relay triggered":
+                                        completion_confirmed = True
+                                        break
+                                except json.JSONDecodeError:
+                                    pass
+                        else:
+                            time.sleep(0.1)  # Small delay between checks
+                    except Exception as e:
+                        self._handle_worker_status(f"Error reading response: {e}")
+                        break
+                
+                s.close()
+                
+                if completion_confirmed:
+                    return (True, None)
+                elif responses_received > 0:
+                    return (False, "Power cycle started but completion not confirmed")
+                else:
+                    return (False, "No response from Arduino")
+                
+            except Exception as e:
+                return (False, f"Failed to communicate with {port}: {e}")
+                
+        except Exception as e:
+            return (False, f"Power cycle command error: {e}")
+
     def resizeEvent(self, event):
         # Let the layout manager handle positions/sizes for widgets we
         # inserted into layouts (stopRecording and autoRecover). Just call
@@ -989,41 +1241,15 @@ class Ui(QMainWindow):
                 # the user can confirm 'Device powered' when ready.
                 if msg.clickedButton() is relay_btn:
                     try:
-                        if serial is None or serial_list_ports is None:
-                            self._handle_worker_status(
-                                "pyserial not available: cannot drive relay"
-                            )
+                        success, error = self._send_power_cycle_command()
+                        if success:
+                            self._handle_worker_status("Sent power cycle command to Arduino")
                         else:
-                            # Prefer VID/PID detection for Nano, then fall back to
-                            # the existing heuristics.
-                            port = self._find_arduino_port()
-
-                            if port is None:
-                                self._handle_worker_status(
-                                    "No Arduino-like serial device found to drive relay"
-                                )
-                            else:
-                                try:
-                                    baud = 9600
-                                    timeout = 1
-                                    s = serial.Serial(port, baudrate=baud, timeout=timeout)
-                                    time.sleep(2)
-                                    # send ASCII '1' — device on the other side
-                                    s.write(b'1')
-                                    s.flush()
-                                    time.sleep(0.15)
-                                    s.close()
-                                    self._handle_worker_status(
-                                        f"Sent relay command to {port}"
-                                    )
-                                except Exception as e:
-                                    self._handle_worker_status(
-                                        f"Failed to send relay command to {port}: {e}"
-                                    )
+                            self._handle_worker_status(f"Failed to send power cycle command: {error}")
                     except Exception as e:
                         # ensure any serial-related errors are logged but don't
                         # break the dialog loop
-                        self._handle_worker_status(f"Relay switch error: {e}")
+                        self._handle_worker_status(f"Power cycle command error: {e}")
                     # loop again so the user can either retry relay switch or
                     # press the Device powered button when they have cycled power
                     continue
@@ -1078,52 +1304,24 @@ class Ui(QMainWindow):
 
     def _handle_request_power_cycle(self):
         """Handle a worker power-cycle request: either auto-recover via Arduino
-        (send '1' and refresh) or fall back to the interactive dialog.
+        (send JSON power cycle command) or fall back to the interactive dialog.
         """
         try:
             if getattr(self, 'autoRecover', None) and self.autoRecover.isChecked():
-                # attempt automatic relay toggle via serial
+                # attempt automatic power cycle via Arduino
                 try:
-                    if serial is None or serial_list_ports is None:
-                        self._handle_worker_status("pyserial not available: cannot auto-recover; opening dialog")
+                    success, error = self._send_power_cycle_command()
+                    
+                    if not success:
+                        self._handle_worker_status(f"Auto-recover failed: {error}; opening dialog")
                         self._prompt_power_cycle()
                         return
-                    # Prefer VID/PID detection for Nano, then fall back to
-                    # the existing heuristics.
-                    port = self._find_arduino_port()
-
-                    if port is None:
-                        self._handle_worker_status("No Arduino-like serial device found to drive relay; opening dialog")
-                        self._prompt_power_cycle()
-                        return
-
+                    
+                    self._handle_worker_status("Sent auto-recover power cycle command; waiting 5s")
                     try:
-                        # Many Arduinos auto-reset when the serial port is opened.
-                        # Wait a short time after opening so the sketch can start.
-                        baud = 9600
-                        timeout = 1
-                        s = serial.Serial(port, baudrate=baud, timeout=timeout)
-                        time.sleep(2.0)
-                        # send ASCII '1' — device on the other side
-                        try:
-                            s.write(b"1")
-                        except TypeError:
-                            s.write("1".encode('ascii'))
-                        s.flush()
-                        s.close()
-                        self._handle_worker_status(f"Sent auto-recover relay command to {port}; waiting 5s")
-                        try:
-                            self._show_notification("Auto recover", f"Sent relay command to {port}; waiting 5s", timeout=3000)
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        self._handle_worker_status(f"Failed to send auto-recover to {port}: {e}")
-                        try:
-                            self._show_notification("Auto recover failed", f"Failed to send to {port}: {e}", timeout=5000)
-                        except Exception:
-                            pass
-                        self._prompt_power_cycle()
-                        return
+                        self._show_notification("Auto recover", "Sent power cycle command; waiting 5s", timeout=3000)
+                    except Exception:
+                        pass
 
                     # wait 5 seconds for device to power-cycle and re-enumerate
                     time.sleep(5)
@@ -1274,96 +1472,479 @@ class Ui(QMainWindow):
             self.statusBar().showMessage("Invalid input")
 
     def record_data(self):
-        if self.fpga:
+        if not self.fpga:
+            self.statusBar().showMessage("Please update registers first")
+            return
+
+        try:
+            numFiles = int(self.nFiles.text())
+            if numFiles <= 0:
+                raise ValueError
+        except Exception:
+            self.statusBar().showMessage("Invalid number of files")
+            return
+
+        folder_path = self.save_path
+        if not folder_path:
+            self.statusBar().showMessage("Please select a save folder")
+            return
+
+        file_name = self.saveFileName.text() or "file"
+
+        # If rotation is not enabled, keep previous behaviour (single worker)
+        if not getattr(self, 'rotationCheckbox', None) or not self.rotationCheckbox.isChecked():
+            # original single-run behaviour
+            self.progressBar.setMaximum(numFiles)
+            self.progressBar.setValue(0)
+            self.progressBar.show()
+            self.thread = QThread()
+            self.worker = ReaderWorker(self.fpga, folder_path, file_name, numFiles, max_retries=2, poll_timeout=8.0)
+            self.worker.moveToThread(self.thread)
             try:
-                # perform an extra refresh before measurement to ensure device state
-               # try:
-                #    self._handle_worker_status("Refreshing FPGA before measurement...")
-                 #   self.fpga.refresh()
-                #except Exception as e:
-                 #   self._handle_worker_status(f"FPGA refresh before measurement failed: {e}")
-                  #  self.statusBar().showMessage(f"FPGA refresh failed: {e}")
-                   # return
+                self.worker._stop_requested = False
+            except Exception:
+                pass
+            self.thread.started.connect(self.worker.run)
+            self.worker.progress.connect(self.progressBar.setValue)
+            self.worker.status.connect(self._handle_worker_status)
+            self.worker.request_power_cycle.connect(self._handle_request_power_cycle)
+            self.worker.file_saved.connect(self._on_file_saved)  # Connect live trace update signal
+            self.worker.file_saved.connect(self._on_file_saved_images)  # Connect live image update signal
+            self.worker.set_fpga = self.worker.set_fpga
+            self.worker.finished.connect(self.thread.quit)
+            self.worker.finished.connect(self.worker.deleteLater)
+            self.worker.finished.connect(lambda: self.readFilePath.setText(self.worker.readFilePath))
+            self.worker.finished.connect(lambda: self.load_trace_file(f"{folder_path}/{self.readFilePath.text()}"))
+            self.worker.finished.connect(lambda: self.load_file("image_file", self.imageFileLabel, "image_data", True, f"{folder_path}/{self.readFilePath.text()}"))
+            self.worker.finished.connect(self.build_image)
+            self.thread.finished.connect(self.thread.deleteLater)
+            self.thread.finished.connect(self.progressBar.hide)
+            self.thread.start()
+            return
 
-                numFiles = int(self.nFiles.text())
-                if numFiles <= 0:
-                    raise ValueError
+        # Rotation mode: run numFiles per angle and rotate between batches
+        try:
+            angleNum = int(self.angleNum.text())
+            if angleNum <= 0:
+                raise ValueError
+        except Exception:
+            self.statusBar().showMessage("Invalid number of angles")
+            return
 
-                folder_path = self.save_path
-                if not folder_path:
-                    self.statusBar().showMessage("Please select a save folder")
-                    return
+        # compute discrete rotation step
+        angle_step = round(360 / angleNum)
 
-                self.progressBar.setMaximum(numFiles)
-                self.progressBar.setValue(0)
-                self.progressBar.show()
-                file_name = self.saveFileName.text() or "file"
-                self.thread = QThread()
-                # pass a few extra robustness parameters (retries, polling timeout)
-                self.worker = ReaderWorker(
-                    self.fpga, folder_path, file_name, numFiles, max_retries=2, poll_timeout=8.0
-                )
-                self.worker.moveToThread(self.thread)
+        # prepare cumulative progress
+        total_files = numFiles * angleNum
+        self.progressBar.setMaximum(total_files)
+        self.progressBar.setValue(0)
+        self.progressBar.show()
 
-                # clear any previous stop request when starting a new recording
+        # Try to create rotational controller on demand
+        try:
+            # Try to auto-detect a port, fall back to COM6 then COM4
+            port = self._find_arduino_port() or "COM6"
+            # validate port can be opened then closed (don't keep it open)
+            try:
+                rc = RotationalController(port=port)
                 try:
-                    self.worker._stop_requested = False
+                    rc.arduino.close()
                 except Exception:
                     pass
+                self._handle_worker_status(f"Rotation controller port {port} is available")
+            except Exception as e:
+                # try fallback COM6 explicitly if not already
+                if port != "COM6":
+                    try:
+                        rc = RotationalController(port="COM6")
+                        try:
+                            rc.arduino.close()
+                        except Exception:
+                            pass
+                        self._handle_worker_status("Rotation controller connected to COM6 (fallback)")
+                        port = "COM6"
+                    except Exception as e2:
+                        self._handle_worker_status(f"Failed to open rotation controller: {e}; {e2}")
+                        QMessageBox.warning(self, "Rotation error", f"Cannot open rotation controller: {e}\n{e2}")
+                        return
+                else:
+                    self._handle_worker_status(f"Failed to open rotation controller on {port}: {e}")
+                    QMessageBox.warning(self, "Rotation error", f"Cannot open rotation controller: {e}")
+                    return
+            # store chosen port for future rotate operations
+            self._rotation_port = port
+        except Exception:
+            QMessageBox.warning(self, "Rotation error", "Cannot find a serial port for rotation controller")
+            return
 
-                self.thread.started.connect(self.worker.run)
-                self.worker.progress.connect(self.progressBar.setValue)
-                # route worker status messages to the combined handler (status bar + console + file)
-                self.worker.status.connect(self._handle_worker_status)
-                # if worker asks for power-cycle, handle either auto-recover or prompt the user
-                self.worker.request_power_cycle.connect(self._handle_request_power_cycle)
-                # allow UI to push back an updated FPGA instance to the worker
-                self.worker.set_fpga = self.worker.set_fpga
-                self.worker.finished.connect(self.thread.quit)
-                self.worker.finished.connect(self.worker.deleteLater)
-                self.worker.finished.connect(
-                    lambda: self.readFilePath.setText(self.worker.readFilePath)
-                )
-                self.worker.finished.connect(
-                    lambda: self.load_trace_file(
-                        f"{folder_path}/{self.readFilePath.text()}"
-                    )
-                )
+        # internal state for batch-run
+        self._record_batch_idx = 0
+        self._record_batch_total = angleNum
+        self._record_batch_numFiles = numFiles
+        self._record_folder = folder_path
+        self._record_fname = file_name
+        self._rotation_stop_requested = False  # Flag to abort rotation sequence
 
-                self.worker.finished.connect(
-                    lambda: self.load_file(
-                        "image_file",
-                        self.imageFileLabel,
-                        "image_data",
-                        True,
-                        f"{folder_path}/{self.readFilePath.text()}",
-                    )
-                )
-                self.worker.finished.connect(self.build_image)
-
-                self.worker.finished.connect(self.build_image)
-                self.thread.finished.connect(self.thread.deleteLater)
-                self.thread.finished.connect(self.progressBar.hide)
-                self.thread.start()
-
-            except ValueError:
-                self.statusBar().showMessage("Invalid number of files")
-        else:
-            self.statusBar().showMessage("Please update registers first")
+        # start first batch
+        self._start_next_rotation_batch()
 
     def _on_stop_clicked(self):
-        """Handler for Stop button: request worker to stop after current file."""
+        """Handler for Stop button: request worker to stop and abort all remaining batches."""
         try:
+            # Set flag to abort rotation sequence
+            self._rotation_stop_requested = True
+            
             if hasattr(self, "worker") and self.worker is not None:
                 try:
                     self.worker.stop()
-                    self._handle_worker_status("User requested stop: will stop after current file")
+                    # Worker will emit its own status message
                 except Exception as e:
                     self._handle_worker_status(f"Failed to request stop: {e}")
             else:
                 self._handle_worker_status("No recording in progress to stop")
         except Exception:
             pass
+
+    def _on_home_clicked(self):
+        """Handler for HOME button: send home command to Arduino and close port."""
+        try:
+            self._handle_worker_status("Sending HOME command to Arduino...")
+            success, responses, error = self._send_arduino_command({"command": "home"}, timeout=10.0)
+            
+            if success:
+                self._handle_worker_status("HOME command completed successfully")
+                # Check if any response indicates an error
+                for resp in responses or []:
+                    if isinstance(resp, dict) and resp.get("status") == "ERROR":
+                        QMessageBox.warning(self, "HOME Error", f"Arduino error: {resp.get('msg', 'Unknown error')}")
+                        return
+            else:
+                self._handle_worker_status(f"HOME command failed: {error}")
+                QMessageBox.warning(self, "HOME Error", f"Failed to send HOME command: {error}")
+        except Exception as e:
+            self._handle_worker_status(f"Error in HOME button handler: {e}")
+            QMessageBox.warning(self, "HOME Error", f"Error: {e}")
+
+    def _on_set_home_clicked(self):
+        """Handler for Set HOME button: confirm and send set home command to Arduino."""
+        try:
+            # Show confirmation dialog
+            reply = QMessageBox.question(
+                self,
+                "Confirm Set HOME",
+                "This will set the current motor position as the HOME (zero) position.\n\nAre you sure you want to continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if reply != QMessageBox.Yes:
+                self._handle_worker_status("Set HOME cancelled by user")
+                return
+            
+            # User confirmed, send the command
+            self._handle_worker_status("Sending Set HOME command to Arduino...")
+            success, responses, error = self._send_arduino_command({"command": "set home"}, timeout=3.0)
+            
+            if success:
+                self._handle_worker_status("Set HOME command completed successfully")
+                # Check if any response indicates an error
+                for resp in responses or []:
+                    if isinstance(resp, dict) and resp.get("status") == "ERROR":
+                        QMessageBox.warning(self, "Set HOME Error", f"Arduino error: {resp.get('msg', 'Unknown error')}")
+                        return
+                QMessageBox.information(self, "Set HOME", "Current position has been set as HOME (zero).")
+            else:
+                self._handle_worker_status(f"Set HOME command failed: {error}")
+                QMessageBox.warning(self, "Set HOME Error", f"Failed to send Set HOME command: {error}")
+        except Exception as e:
+            self._handle_worker_status(f"Error in Set HOME button handler: {e}")
+            QMessageBox.warning(self, "Set HOME Error", f"Error: {e}")
+
+    def _on_custom_angle_clicked(self):
+        """Handler for Custom angle button: send absolute position command to Arduino."""
+        try:
+            # Get the angle from the input field
+            try:
+                absolute_angle = float(self.customAngleInput.text())
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Input", "Please enter a valid number for the angle.")
+                return
+            
+            # Send the command
+            self._handle_worker_status(f"Sending command to move to {absolute_angle} degrees...")
+            success, responses, error = self._send_arduino_command(
+                {"command": "absolute position", "degrees": absolute_angle}, 
+                timeout=30.0
+            )
+            
+            if success:
+                self._handle_worker_status(f"Custom angle command completed: moved to {absolute_angle} degrees")
+                # Check if any response indicates an error
+                for resp in responses or []:
+                    if isinstance(resp, dict) and resp.get("status") == "ERROR":
+                        QMessageBox.warning(self, "Custom Angle Error", f"Arduino error: {resp.get('msg', 'Unknown error')}")
+                        return
+            else:
+                self._handle_worker_status(f"Custom angle command failed: {error}")
+                QMessageBox.warning(self, "Custom Angle Error", f"Failed to send custom angle command: {error}")
+        except Exception as e:
+            self._handle_worker_status(f"Error in Custom angle button handler: {e}")
+            QMessageBox.warning(self, "Custom Angle Error", f"Error: {e}")
+
+    def _start_next_rotation_batch(self):
+        """Start the next batch for rotation mode."""
+        # Check if user requested stop
+        if getattr(self, '_rotation_stop_requested', False):
+            self._handle_worker_status("Stop requested: not starting next rotation batch")
+            # Force to end state
+            self._record_batch_idx = self._record_batch_total
+            try:
+                self.progressBar.hide()
+            except Exception:
+                pass
+            return
+        
+        if self._record_batch_idx >= self._record_batch_total:
+            # all done
+            try:
+                # final UI updates: set last read file and load images
+                if getattr(self, 'worker', None) and getattr(self.worker, 'readFilePath', None):
+                    self.readFilePath.setText(self.worker.readFilePath)
+                    try:
+                        self.load_trace_file(f"{self._record_folder}/{self.readFilePath.text()}")
+                    except Exception:
+                        pass
+                    try:
+                        self.load_file("image_file", self.imageFileLabel, "image_data", True, f"{self._record_folder}/{self.readFilePath.text()}")
+                    except Exception:
+                        pass
+                self.build_image()
+            finally:
+                try:
+                    self.progressBar.hide()
+                except Exception:
+                    pass
+            return
+
+        numFiles = self._record_batch_numFiles
+        folder_path = self._record_folder
+        # create per-angle base filename when in rotation mode: format base_a{angleIndex}
+        angle_index = self._record_batch_idx  # 0-based
+        file_name = f"{self._record_fname}_a{angle_index+1}"
+
+        # create and start worker for this batch
+        self.thread = QThread()
+        self.worker = ReaderWorker(self.fpga, folder_path, file_name, numFiles, max_retries=2, poll_timeout=8.0)
+        self.worker.moveToThread(self.thread)
+        try:
+            self.worker._stop_requested = False
+        except Exception:
+            pass
+        self.thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self._on_batch_progress)
+        self.worker.status.connect(self._handle_worker_status)
+        self.worker.request_power_cycle.connect(self._handle_request_power_cycle)
+        self.worker.file_saved.connect(self._on_file_saved)  # Connect live trace update signal
+        self.worker.file_saved.connect(self._on_file_saved_images)  # Connect live image update signal
+        # ensure worker can receive updated fpga instance
+        self.worker.set_fpga = self.worker.set_fpga
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(self._on_batch_finished)
+        self.thread.finished.connect(self.thread.deleteLater)
+        # Start
+        self.thread.start()
+
+    def _on_batch_progress(self, value):
+        """Update cumulative progress bar from current batch progress value."""
+        try:
+            base = self._record_batch_idx * self._record_batch_numFiles
+            self.progressBar.setValue(base + int(value))
+        except Exception:
+            try:
+                self.progressBar.setValue(int(value))
+            except Exception:
+                pass
+
+    def _on_file_saved(self, file_path):
+        """Handler for live trace plot updates when a file is saved.
+        
+        Only updates if Auto update checkbox is checked.
+        """
+        try:
+            # Check if auto update is enabled
+            if not getattr(self, 'autoUpdateTrace', None) or not self.autoUpdateTrace.isChecked():
+                return
+            
+            # Load and plot the trace from the saved file
+            self.load_trace_file(file_path)
+        except Exception as e:
+            # Don't let plot update errors stop recording
+            pass
+
+    def _on_file_saved_images(self, file_path):
+        """Handler for live 2D image updates when a file is saved.
+        
+        Only updates if Auto update checkbox is checked.
+        """
+        try:
+            # Check if auto update is enabled
+            if not getattr(self, 'autoUpdateImages', None) or not self.autoUpdateImages.isChecked():
+                return
+            
+            # Load the file and update image data
+            self.load_file("image_file", self.imageFileLabel, "image_data", True, file_path)
+            # Rebuild images to update both left and right displays
+            self.build_image()
+        except Exception as e:
+            # Don't let image update errors stop recording
+            pass
+
+    def _perform_rotation(self, angle_deg):
+        """Perform a single rotation by opening the rotation controller, rotating, then closing the port.
+
+        Uses robust port detection to find Arduino.
+        This avoids leaving the COM port open between runs.
+        """
+        # Use robust Arduino port detection
+        port = self._find_arduino_port()
+        if port is None:
+            # Fallback to stored port or default
+            port = getattr(self, '_rotation_port', None) or "COM6"
+        
+        rc = None
+        try:
+            rc = RotationalController(port=port)
+            rc.rotate(angle_deg)
+            # Add settling time after motor completes rotation
+            # This allows mechanical vibrations to dampen before measurement starts
+            time.sleep(0.5)  # 500ms settling time
+        finally:
+            try:
+                if rc is not None and getattr(rc, 'arduino', None):
+                    rc.arduino.close()
+            except Exception:
+                pass
+
+    def _send_arduino_command(self, command_dict, timeout=5.0):
+        """Send a command to Arduino, read and display the response.
+        
+        Uses robust port detection to find Arduino.
+        
+        Args:
+            command_dict: Dictionary with command (e.g., {"command": "home"})
+            timeout: How long to wait for response (seconds)
+            
+        Returns:
+            Tuple of (success: bool, response_dict: dict or None, error_msg: str or None)
+        """
+        # Use robust Arduino port detection
+        port = self._find_arduino_port()
+        if port is None:
+            # Fallback to stored port or default
+            port = getattr(self, '_rotation_port', None) or "COM6"
+        
+        rc = None
+        try:
+            rc = RotationalController(port=port)
+            
+            # Send command
+            cmd_json = json.dumps(command_dict)
+            self._handle_worker_status(f"→ Arduino ({port}): {cmd_json}")
+            
+            rc.arduino.write((cmd_json + "\n").encode("utf-8"))
+            rc.arduino.flush()
+            time.sleep(0.1)  # Small delay for Arduino to process
+            
+            # Read response(s) - Arduino may send multiple lines
+            responses = []
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                try:
+                    if rc.arduino.in_waiting > 0:
+                        line = rc.arduino.readline().decode('utf-8', errors='ignore').strip()
+                        if line:
+                            self._handle_worker_status(f"← Arduino: {line}")
+                            try:
+                                resp_json = json.loads(line)
+                                responses.append(resp_json)
+                                # If we get an OK or ERROR status, consider command complete
+                                if resp_json.get("status") in ["OK", "ERROR"]:
+                                    return (True, responses, None)
+                            except json.JSONDecodeError:
+                                # Non-JSON response, just log it
+                                pass
+                    time.sleep(0.05)
+                except Exception as e:
+                    break
+            
+            # If we got here, timeout or no clear response
+            if responses:
+                return (True, responses, None)
+            else:
+                return (False, None, "No response from Arduino")
+                
+        except Exception as e:
+            error_msg = f"Arduino communication error: {e}"
+            self._handle_worker_status(error_msg)
+            return (False, None, error_msg)
+        finally:
+            try:
+                if rc is not None and getattr(rc, 'arduino', None):
+                    rc.arduino.close()
+            except Exception:
+                pass
+
+    def _on_batch_finished(self):
+        """Handle a finished batch: rotate if more batches remain, otherwise finalize."""
+        try:
+            # Check if user requested stop
+            if getattr(self, '_rotation_stop_requested', False):
+                self._handle_worker_status("Stop requested: aborting remaining rotation batches")
+                # Force to end state
+                self._record_batch_idx = self._record_batch_total
+                # Clean up and hide progress bar
+                try:
+                    self.progressBar.hide()
+                except Exception:
+                    pass
+                return
+            
+            # increment finished batch count
+            self._record_batch_idx += 1
+            # If we still have batches remaining, rotate and start next
+            # compute step angle
+            angle_step = 360 / self._record_batch_total
+            if self._record_batch_idx < self._record_batch_total:
+                # perform rotation and then start next batch
+                try:
+                    self._handle_worker_status(f"Rotating by {angle_step} degrees for next batch ({self._record_batch_idx + 1}/{self._record_batch_total})")
+                    # perform rotation (open/rotate/close)
+                    try:
+                        self._perform_rotation(angle_step)
+                    except Exception as e:
+                        self._handle_worker_status(f"Rotation failed: {e}")
+                        QMessageBox.warning(self, "Rotation error", f"Rotation failed: {e}")
+                        # abort further batches
+                        self._record_batch_idx = self._record_batch_total
+                        self._start_next_rotation_batch()
+                        return
+                finally:
+                    self._start_next_rotation_batch()
+                    return
+            else:
+                # we've finished all batches; perform one final rotation to return to origin
+                try:
+                    self._handle_worker_status("Performing final rotation to return motor to original position")
+                    try:
+                        self._perform_rotation(360 - (angle_step * (self._record_batch_total - 1)))
+                    except Exception as e:
+                        self._handle_worker_status(f"Final rotation failed: {e}")
+                        QMessageBox.warning(self, "Rotation error", f"Final rotation failed: {e}")
+                finally:
+                    self._start_next_rotation_batch()
+        except Exception as e:
+            self._handle_worker_status(f"Batch finished handler exception: {e}")
 
     def load_trace_file(self, file_path=None):
         self.file_data = {}
@@ -1465,10 +2046,26 @@ class Ui(QMainWindow):
                         or int(self.edgeLeft.text()) >= int(self.edgeRight.text())
                     ):
                         raise ValueError
+                    
+                    # Determine processing mode based on normalization dropdown
+                    norm_mode = self.useNormalization.currentText()
+                    
                     for key, value in peaks.items():
-                        right_mean = np.mean(value[int(self.edgeRight.text()) :])
-                        left_mean = np.mean(value[: int(self.edgeLeft.text())])
-                        peaks[key] = (right_mean - left_mean, left_mean)
+                        if norm_mode == "flat-field only":
+                            # Use full trace mean (no baseline subtraction)
+                            full_mean = np.mean(value)
+                            peaks[key] = (full_mean, 0)  # Signal = full mean, dark current = 0
+                        elif norm_mode == "leakage/flat-field from open beam":
+                            # Calculate right_mean, but baseline correction will use open beam baseline
+                            right_mean = np.mean(value[int(self.edgeRight.text()) :])
+                            left_mean = np.mean(value[: int(self.edgeLeft.text())])
+                            # Store right_mean as signal (will be corrected in build_image with open beam baseline)
+                            peaks[key] = (right_mean, left_mean)  # Store both for later processing
+                        else:
+                            # Original behavior: use edge-based baseline subtraction
+                            right_mean = np.mean(value[int(self.edgeRight.text()) :])
+                            left_mean = np.mean(value[: int(self.edgeLeft.text())])
+                            peaks[key] = (right_mean - left_mean, left_mean)
                 except ValueError:
                     self.statusBar().showMessage("Invalid edge values")
                     return np.zeros((16, 16))
@@ -1491,6 +2088,10 @@ class Ui(QMainWindow):
                 setattr(self, data_attr, array_image)
                 if update_dark:
                     setattr(self, "dark_current_data", array_dark)
+                
+                # If loading open beam file, also store its baseline for mode 3
+                if data_attr == "open_beam_data":
+                    setattr(self, "open_beam_baseline", array_dark)
 
             label.setText(file_path.split("/")[-1])
         except ValueError:
@@ -1518,29 +2119,44 @@ class Ui(QMainWindow):
             self.statusBar().showMessage("Invalid file")
 
     def build_image(self):
-        if self.useNormalization.isChecked():
-            if (not self.image_file) or (not self.open_beam_file):
-                self.statusBar().showMessage(
-                    "Please select both image and open beam files"
-                )
+        norm_mode = self.useNormalization.currentText()
+        
+        # Helper function to set image levels respecting manual scale input
+        def set_image_levels(img_item, color_bar, image_data, low_field, upper_field, low_manual_flag, upper_manual_flag):
+            """Set image and colorbar levels, respecting manual user input if set."""
+            # Check if user has manually set the scales
+            if low_manual_flag or upper_manual_flag:
+                # Use manual values if they exist
+                try:
+                    low_val = float(low_field.text()) if low_manual_flag else image_data.min()
+                    upper_val = float(upper_field.text()) if upper_manual_flag else image_data.max()
+                    img_item.setLevels((low_val, upper_val))
+                    color_bar.setLevels((low_val, upper_val))
+                    # Don't update text fields - keep user's manual values
+                except ValueError:
+                    # If manual value is invalid, fall back to auto-detection
+                    if np.isnan(image_data.min()) or np.isnan(image_data.max()):
+                        img_item.setLevels((0, 1))
+                        color_bar.setLevels((0, 1))
+                    else:
+                        img_item.setLevels((image_data.min(), image_data.max()))
+                        color_bar.setLevels((image_data.min(), image_data.max()))
             else:
-                left_image = self.image_data / self.open_beam_data
-
-                if self.useThreshold.isChecked():
-                    left_image[left_image > 1] = 1
-
-                self.img_item.setImage(left_image)
-                if np.isnan(left_image.min()) or np.isnan(left_image.max()):
-                    self.img_item.setLevels((0, 1))
-                    self.color_bar.setLevels((0, 1))
-                    self.imageUpperScale.setText("1")
-                    self.imageLowScale.setText("0")
+                # Auto-detection (original behavior)
+                if np.isnan(image_data.min()) or np.isnan(image_data.max()):
+                    img_item.setLevels((0, 1))
+                    color_bar.setLevels((0, 1))
+                    upper_field.setText("1")
+                    low_field.setText("0")
                 else:
-                    self.img_item.setLevels((left_image.min(), left_image.max()))
-                    self.color_bar.setLevels((left_image.min(), left_image.max()))
-                self.imageUpperScale.setText(f"{left_image.max()}")
-                self.imageLowScale.setText(f"{left_image.min()}")
-        else:
+                    img_item.setLevels((image_data.min(), image_data.max()))
+                    color_bar.setLevels((image_data.min(), image_data.max()))
+                    upper_field.setText(f"{image_data.max()}")
+                    low_field.setText(f"{image_data.min()}")
+        
+        # Process left image based on normalization mode
+        if norm_mode == "none":
+            # Original absolute charge mode (no normalization)
             if not self.image_file:
                 self.statusBar().showMessage("Please select image file")
             else:
@@ -1552,16 +2168,76 @@ class Ui(QMainWindow):
                     * 1e15
                 )
                 self.img_item.setImage(left_image)
-                if np.isnan(left_image.min()) or np.isnan(left_image.max()):
-                    self.img_item.setLevels((0, 1))
-                    self.color_bar.setLevels((0, 1))
-                    self.imageUpperScale.setText("1")
-                    self.imageLowScale.setText("0")
-                else:
-                    self.img_item.setLevels((left_image.min(), left_image.max()))
-                    self.color_bar.setLevels((left_image.min(), left_image.max()))
-                    self.imageUpperScale.setText(f"{left_image.max()}")
-                    self.imageLowScale.setText(f"{left_image.min()}")
+                set_image_levels(
+                    self.img_item, self.color_bar, left_image,
+                    self.imageLowScale, self.imageUpperScale,
+                    self.imageLowScale_manual, self.imageUpperScale_manual
+                )
+        
+        elif norm_mode == "full leakage/flat-field":
+            # Original normalization mode (baseline-subtracted signals divided)
+            if (not self.image_file) or (not self.open_beam_file):
+                self.statusBar().showMessage(
+                    "Please select both image and open beam files"
+                )
+            else:
+                left_image = self.image_data / self.open_beam_data
+
+                if self.useThreshold.isChecked():
+                    left_image[left_image > 1] = 1
+
+                self.img_item.setImage(left_image)
+                set_image_levels(
+                    self.img_item, self.color_bar, left_image,
+                    self.imageLowScale, self.imageUpperScale,
+                    self.imageLowScale_manual, self.imageUpperScale_manual
+                )
+        
+        elif norm_mode == "leakage/flat-field from open beam":
+            # Image signal: right_mean from image - left_mean (baseline) from open beam
+            # Then normalize by open beam signal
+            if (not self.image_file) or (not self.open_beam_file):
+                self.statusBar().showMessage(
+                    "Please select both image and open beam files"
+                )
+            else:
+                # self.image_data contains right_mean from image file (from load_file mode 3)
+                # self.open_beam_baseline contains left_mean from open beam file
+                # self.open_beam_data contains (right_mean - left_mean) from open beam file
+                
+                # Calculate baseline-corrected image signal using open beam's baseline
+                image_signal = self.image_data - self.open_beam_baseline
+                left_image = image_signal / self.open_beam_data
+
+                if self.useThreshold.isChecked():
+                    left_image[left_image > 1] = 1
+
+                self.img_item.setImage(left_image)
+                set_image_levels(
+                    self.img_item, self.color_bar, left_image,
+                    self.imageLowScale, self.imageUpperScale,
+                    self.imageLowScale_manual, self.imageUpperScale_manual
+                )
+        
+        elif norm_mode == "flat-field only":
+            # Use full mean for both files, no baseline subtraction
+            if (not self.image_file) or (not self.open_beam_file):
+                self.statusBar().showMessage(
+                    "Please select both image and open beam files"
+                )
+            else:
+                # Both files have full mean values (no baseline subtraction)
+                left_image = self.image_data / self.open_beam_data
+
+                if self.useThreshold.isChecked():
+                    left_image[left_image > 1] = 1
+
+                self.img_item.setImage(left_image)
+                set_image_levels(
+                    self.img_item, self.color_bar, left_image,
+                    self.imageLowScale, self.imageUpperScale,
+                    self.imageLowScale_manual, self.imageUpperScale_manual
+                )
 
         if self.darkCurrent.isChecked():
             if not self.image_file:
@@ -1575,16 +2251,11 @@ class Ui(QMainWindow):
                     * 1e15
                 )
                 self.mix_img_item.setImage(right_image)
-                if np.isnan(right_image.min()) or np.isnan(right_image.max()):
-                    self.mix_img_item.setLevels((0, 1))
-                    self.mix_color_bar.setLevels((0, 1))
-                    self.mixUpperScale.setText("1")
-                    self.mixLowScale.setText("0")
-                else:
-                    self.mix_img_item.setLevels((right_image.min(), right_image.max()))
-                    self.mix_color_bar.setLevels((right_image.min(), right_image.max()))
-                    self.mixUpperScale.setText(f"{right_image.max()}")
-                    self.mixLowScale.setText(f"{right_image.min()}")
+                set_image_levels(
+                    self.mix_img_item, self.mix_color_bar, right_image,
+                    self.mixLowScale, self.mixUpperScale,
+                    self.mixLowScale_manual, self.mixUpperScale_manual
+                )
 
         if self.openBeam.isChecked():
             if not self.open_beam_file:
@@ -1598,16 +2269,11 @@ class Ui(QMainWindow):
                     * 1e15
                 )
                 self.mix_img_item.setImage(right_image)
-                if np.isnan(right_image.min()) or np.isnan(right_image.max()):
-                    self.mix_img_item.setLevels((0, 1))
-                    self.mix_color_bar.setLevels((0, 1))
-                    self.mixUpperScale.setText("1")
-                    self.mixLowScale.setText("0")
-                else:
-                    self.mix_img_item.setLevels((right_image.min(), right_image.max()))
-                    self.mix_color_bar.setLevels((right_image.min(), right_image.max()))
-                    self.mixUpperScale.setText(f"{right_image.max()}")
-                    self.mixLowScale.setText(f"{right_image.min()}")
+                set_image_levels(
+                    self.mix_img_item, self.mix_color_bar, right_image,
+                    self.mixLowScale, self.mixUpperScale,
+                    self.mixLowScale_manual, self.mixUpperScale_manual
+                )
 
     def change_scales(self):
         if self.imageUpperScale.text() and self.imageLowScale.text():

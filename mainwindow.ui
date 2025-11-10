@@ -706,6 +706,33 @@
     <item row="1" column="1">
      <layout class="QVBoxLayout" name="verticalLayout_4">
       <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_correction">
+        <item>
+         <widget class="QLabel" name="label_correction">
+          <property name="text">
+           <string>Correction</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="useNormalization"/>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_correction">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
        <layout class="QHBoxLayout" name="horizontalLayout_22">
         <item>
          <spacer name="horizontalSpacer">
@@ -823,14 +850,7 @@
             </property>
            </widget>
           </item>
-          <item>
-           <widget class="QCheckBox" name="useNormalization">
-            <property name="text">
-             <string>Normilize</string>
-            </property>
-           </widget>
-          </item>
-          <item>
+          <item alignment="Qt::AlignCenter">
            <widget class="QRadioButton" name="darkCurrent">
             <property name="text">
              <string>dark current</string>

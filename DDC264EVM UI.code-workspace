@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "DDC264EVM_UI (Python App)",
+			"path": "."
+		},
+		{
+			"name": "step_motor_controller (Arduino)",
+			"path": "step_motor_controller"
+		}
+	],
+	"settings": {}
+}
