@@ -178,7 +178,6 @@ class ReaderWorker(QObject):
                     before_set = set(_list_indices())
                     error_msg = None
                     ret = None
-                    poll_deadline = time.time() + self.poll_timeout
                     try:
                         self.status.emit(
                             f"Starting transfer for file index {desired_index} (attempt {attempt})"
@@ -186,6 +185,8 @@ class ReaderWorker(QObject):
                         ret = self.fpga.get_data(
                             os.path.join(self.folder_path, self.file_name), desired_index - 1
                         )
+                        # Set poll deadline AFTER get_data completes, so long acquisitions don't timeout
+                        poll_deadline = time.time() + self.poll_timeout
                         # If get_data returns a negative code treat it as transient but log it.
                         if isinstance(ret, int) and ret < 0:
                             error_msg = f"get_data returned error code {ret}"
@@ -266,8 +267,8 @@ class ReaderWorker(QObject):
                     while time.time() < poll_deadline:
                         after_set = set(_list_indices())
                         new = sorted(list(after_set - before_set))
-                        if new:
-                            last_saved_index = new[0]
+                        if new and desired_index in new:
+                            last_saved_index = desired_index
                             success = True
                             break
                         time.sleep(0.15)
@@ -304,7 +305,6 @@ class ReaderWorker(QObject):
                         time.sleep(0.5)
 
                 if not success:
-                    self.numFiles += 1
                     # After all recovery attempts failed, request a manual power-cycle from the user
                     self.status.emit(
                         f"Failed to capture file index {desired_index} after {self.max_retries} attempts. Requesting manual power-cycle."
