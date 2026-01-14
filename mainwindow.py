@@ -428,6 +428,22 @@ class Ui(QMainWindow):
         self.useNormalization.addItem("full leakage/flat-field")
         self.useNormalization.addItem("leakage/flat-field from open beam")
         self.useNormalization.addItem("flat-field only")
+        # persistent rotation controller (open once per measurement batch)
+        self._rotation_controller = None
+        self._rotation_port = None
+        # Open persistent rotation controller for the program lifetime
+        try:
+            self._ensure_rotation_controller()
+        except Exception:
+            pass
+        try:
+            # Update status label if present
+            try:
+                self._update_arduino_status_label()
+            except Exception:
+                pass
+        except Exception:
+            pass
         self.useNormalization.setCurrentText("none")
         
         
@@ -771,6 +787,14 @@ class Ui(QMainWindow):
             self.setHomeButton.setStyleSheet("background-color: black; color: white; font-weight: bold;")
             self.setHomeButton.setFixedWidth(80)
 
+            # Arduino connect UI: status label and connect button
+            self.arduinoStatusLabel = QLabel("Disconnected", self)
+            self.arduinoStatusLabel.setStyleSheet("color: red;")
+            self.arduinoStatusLabel.setFixedWidth(140)
+            self.connectArduinoButton = QPushButton("Connect Arduino", self)
+            self.connectArduinoButton.setFixedWidth(120)
+            self.connectArduinoButton.clicked.connect(self._on_connect_arduino_clicked)
+
             # Create a horizontal layout container for all stepper motor controls
             self.stepperControlWidget = QWidget(self)
             self.stepperControlLayout = QHBoxLayout(self.stepperControlWidget)
@@ -784,6 +808,17 @@ class Ui(QMainWindow):
             self.stepperControlLayout.addWidget(self.customAngleInput)
             self.stepperControlLayout.addStretch()  # Add stretch to push Set HOME to the right
             self.stepperControlLayout.addWidget(self.setHomeButton, alignment=Qt.AlignRight)
+            # Add Arduino connection controls to the stepper control row
+            try:
+                self.stepperControlLayout.addWidget(self.arduinoStatusLabel)
+                self.stepperControlLayout.addWidget(self.connectArduinoButton)
+            except Exception:
+                pass
+            try:
+                # Ensure the status label reflects any controller opened earlier
+                self._update_arduino_status_label()
+            except Exception:
+                pass
 
             # Try to find the layout that holds getData and insert both
             parent = None
@@ -1051,10 +1086,13 @@ class Ui(QMainWindow):
             except Exception:
                 ports = []
 
-            # 1) VID/PID match for official Arduino Nano (VID 0x2341, PID 0x0058)
+            # 1) VID/PID match for official Arduino variants
+            # Prefer Nano (VID 0x2341, PID 0x0058) and Mega2560 (VID 0x2341, PID 0x0042)
             for p in ports:
                 try:
-                    if getattr(p, 'vid', None) == 0x2341 and getattr(p, 'pid', None) == 0x0058:
+                    vid = getattr(p, 'vid', None)
+                    pid = getattr(p, 'pid', None)
+                    if vid == 0x2341 and pid in (0x0058, 0x0042):
                         return p.device
                 except Exception:
                     pass
@@ -1077,6 +1115,92 @@ class Ui(QMainWindow):
         except Exception:
             return None
 
+    def _ensure_rotation_controller(self):
+        """Create and store a persistent `RotationalController` if not present.
+
+        Returns the controller instance or None on failure.
+        """
+        if getattr(self, '_rotation_controller', None) is not None:
+            return self._rotation_controller
+
+        port = self._find_arduino_port() or getattr(self, '_rotation_port', None) or "COM6"
+        try:
+            rc = RotationalController(port=port)
+            self._rotation_controller = rc
+            self._rotation_port = port
+            try:
+                self._handle_worker_status(f"Rotation controller opened on {port}")
+            except Exception:
+                pass
+            return rc
+        except Exception as e:
+            try:
+                self._handle_worker_status(f"Failed to open rotation controller on {port}: {e}")
+            except Exception:
+                pass
+            self._rotation_controller = None
+            return None
+
+    def _update_arduino_status_label(self):
+        """Update the on-screen Arduino connection status label and color."""
+        try:
+            lbl = getattr(self, 'arduinoStatusLabel', None)
+            if lbl is None:
+                return
+            rc = getattr(self, '_rotation_controller', None)
+            if rc is not None and getattr(rc, 'arduino', None):
+                port = getattr(self, '_rotation_port', None) or getattr(rc.arduino, 'port', None) or 'unknown'
+                lbl.setText(f"Connected: {port}")
+                lbl.setStyleSheet("color: green;")
+            else:
+                lbl.setText("Disconnected")
+                lbl.setStyleSheet("color: red;")
+        except Exception:
+            pass
+
+    def _on_connect_arduino_clicked(self):
+        """Manual connect button handler: try to open (or reopen) the rotation controller."""
+        try:
+            # Close any existing to force re-open
+            try:
+                self._close_rotation_controller()
+            except Exception:
+                pass
+            rc = self._ensure_rotation_controller()
+            if rc is not None:
+                try:
+                    self._handle_worker_status(f"Arduino connected on {self._rotation_port}")
+                except Exception:
+                    pass
+                try:
+                    QMessageBox.information(self, "Arduino", f"Connected to {self._rotation_port}")
+                except Exception:
+                    pass
+            else:
+                try:
+                    QMessageBox.warning(self, "Arduino", "Failed to connect to Arduino")
+                except Exception:
+                    pass
+        finally:
+            try:
+                self._update_arduino_status_label()
+            except Exception:
+                pass
+
+    def _close_rotation_controller(self):
+        """Close and clear the persistent rotation controller if present."""
+        rc = getattr(self, '_rotation_controller', None)
+        if rc:
+            try:
+                if getattr(rc, 'arduino', None):
+                    try:
+                        rc.arduino.close()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        self._rotation_controller = None
+
     def _send_power_cycle_command(self):
         """Send power cycle command to Arduino using JSON protocol with robust port detection.
         
@@ -1096,17 +1220,24 @@ class Ui(QMainWindow):
                 return (False, "No Arduino-like serial device found")
             
             try:
-                # Open serial connection with proper settings for Arduino
-                baud = 115200  # Match stepper motor controller baud rate
-                timeout = 5  # Increased timeout to wait for relay operation
-                s = serial.Serial(port, baudrate=baud, timeout=timeout)
-                time.sleep(2.0)  # Wait for Arduino reset after serial open
-                
+                # Prefer reusing persistent controller if available to avoid reset delays
+                rc = getattr(self, '_rotation_controller', None)
+                created_locally = False
+                if rc is None:
+                    # open a temporary serial for power-cycle
+                    baud = 115200
+                    timeout = 5
+                    s = serial.Serial(port, baudrate=baud, timeout=timeout)
+                    time.sleep(2.0)
+                    created_locally = True
+                else:
+                    s = rc.arduino
+
                 # Send JSON command for power cycle
                 command = {"command": "power cycle"}
                 cmd_json = json.dumps(command) + "\n"
                 self._handle_worker_status(f"→ Arduino ({port}): {cmd_json.strip()}")
-                
+
                 s.write(cmd_json.encode('utf-8'))
                 s.flush()
                 
@@ -1140,7 +1271,11 @@ class Ui(QMainWindow):
                         self._handle_worker_status(f"Error reading response: {e}")
                         break
                 
-                s.close()
+                if created_locally:
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
                 
                 if completion_confirmed:
                     return (True, None)
@@ -1164,6 +1299,23 @@ class Ui(QMainWindow):
         except Exception:
             try:
                 QMainWindow.resizeEvent(self, event)
+            except Exception:
+                pass
+
+    def closeEvent(self, event):
+        """Ensure rotation controller is closed when the main window is closed."""
+        try:
+            try:
+                self._close_rotation_controller()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            super().closeEvent(event)
+        except Exception:
+            try:
+                QMainWindow.closeEvent(self, event)
             except Exception:
                 pass
 
@@ -1542,37 +1694,46 @@ class Ui(QMainWindow):
 
         # Try to create rotational controller on demand
         try:
-            # Try to auto-detect a port, fall back to COM6 then COM4
-            port = self._find_arduino_port() or "COM6"
-            # validate port can be opened then closed (don't keep it open)
-            try:
-                rc = RotationalController(port=port)
+            # If a persistent controller already exists (opened at startup), reuse it
+            if getattr(self, '_rotation_controller', None) is not None:
                 try:
-                    rc.arduino.close()
+                    existing_port = getattr(self, '_rotation_port', None) or getattr(self._rotation_controller.arduino, 'port', None)
+                    self._handle_worker_status(f"Using existing rotation controller on {existing_port}")
+                    self._rotation_port = existing_port
                 except Exception:
                     pass
-                self._handle_worker_status(f"Rotation controller port {port} is available")
-            except Exception as e:
-                # try fallback COM6 explicitly if not already
-                if port != "COM6":
+            else:
+                # Try to auto-detect a port, fall back to COM6 then COM4
+                port = self._find_arduino_port() or "COM6"
+                # validate port can be opened then closed (don't keep it open)
+                try:
+                    rc = RotationalController(port=port)
                     try:
-                        rc = RotationalController(port="COM6")
+                        rc.arduino.close()
+                    except Exception:
+                        pass
+                    self._handle_worker_status(f"Rotation controller port {port} is available")
+                except Exception as e:
+                    # try fallback COM6 explicitly if not already
+                    if port != "COM6":
                         try:
-                            rc.arduino.close()
-                        except Exception:
-                            pass
-                        self._handle_worker_status("Rotation controller connected to COM6 (fallback)")
-                        port = "COM6"
-                    except Exception as e2:
-                        self._handle_worker_status(f"Failed to open rotation controller: {e}; {e2}")
-                        QMessageBox.warning(self, "Rotation error", f"Cannot open rotation controller: {e}\n{e2}")
+                            rc = RotationalController(port="COM6")
+                            try:
+                                rc.arduino.close()
+                            except Exception:
+                                pass
+                            self._handle_worker_status("Rotation controller connected to COM6 (fallback)")
+                            port = "COM6"
+                        except Exception as e2:
+                            self._handle_worker_status(f"Failed to open rotation controller: {e}; {e2}")
+                            QMessageBox.warning(self, "Rotation error", f"Cannot open rotation controller: {e}\n{e2}")
+                            return
+                    else:
+                        self._handle_worker_status(f"Failed to open rotation controller on {port}: {e}")
+                        QMessageBox.warning(self, "Rotation error", f"Cannot open rotation controller: {e}")
                         return
-                else:
-                    self._handle_worker_status(f"Failed to open rotation controller on {port}: {e}")
-                    QMessageBox.warning(self, "Rotation error", f"Cannot open rotation controller: {e}")
-                    return
-            # store chosen port for future rotate operations
-            self._rotation_port = port
+                # store chosen port for future rotate operations
+                self._rotation_port = port
         except Exception:
             QMessageBox.warning(self, "Rotation error", "Cannot find a serial port for rotation controller")
             return
@@ -1806,25 +1967,38 @@ class Ui(QMainWindow):
         Uses robust port detection to find Arduino.
         This avoids leaving the COM port open between runs.
         """
-        # Use robust Arduino port detection
-        port = self._find_arduino_port()
-        if port is None:
-            # Fallback to stored port or default
-            port = getattr(self, '_rotation_port', None) or "COM6"
-        
-        rc = None
-        try:
-            rc = RotationalController(port=port)
-            rc.rotate(angle_deg)
-            # Add settling time after motor completes rotation
-            # This allows mechanical vibrations to dampen before measurement starts
-            time.sleep(0.5)  # 500ms settling time
-        finally:
+        # Try to reuse a persistent controller if available
+        created_locally = False
+        rc = getattr(self, '_rotation_controller', None)
+        if rc is None:
+            rc = self._ensure_rotation_controller()
+        if rc is None:
+            # fallback: create a temporary controller for this rotation
+            port = self._find_arduino_port() or getattr(self, '_rotation_port', None) or "COM6"
             try:
-                if rc is not None and getattr(rc, 'arduino', None):
-                    rc.arduino.close()
+                rc = RotationalController(port=port)
+                created_locally = True
+            except Exception as e:
+                self._handle_worker_status(f"Failed to open rotation controller for rotation: {e}")
+                return
+
+        t0 = time.time()
+        try:
+            self._handle_worker_status(f"Rotating {angle_deg}° (port {getattr(rc, 'arduino', None) and getattr(rc.arduino, 'port', getattr(self, '_rotation_port', 'unknown'))})")
+            rc.rotate(angle_deg)
+            # Add small settling time after motor completes rotation (can be reduced)
+            time.sleep(0.5)
+            try:
+                self._handle_worker_status(f"Rotation complete in {time.time()-t0:.3f}s")
             except Exception:
                 pass
+        finally:
+            if created_locally:
+                try:
+                    if getattr(rc, 'arduino', None):
+                        rc.arduino.close()
+                except Exception:
+                    pass
 
     def _send_arduino_command(self, command_dict, timeout=5.0):
         """Send a command to Arduino, read and display the response.
@@ -1844,18 +2018,38 @@ class Ui(QMainWindow):
             # Fallback to stored port or default
             port = getattr(self, '_rotation_port', None) or "COM6"
         
-        rc = None
+        # Prefer using persistent controller to avoid repeated opens/resets
+        created_locally = False
+        rc = getattr(self, '_rotation_controller', None)
+        if rc is None:
+            rc = self._ensure_rotation_controller()
+        if rc is None:
+            # fallback: create temporary controller
+            try:
+                rc = RotationalController(port=port)
+                created_locally = True
+            except Exception as e:
+                error_msg = f"Arduino communication open error: {e}"
+                self._handle_worker_status(error_msg)
+                return (False, None, error_msg)
+
         try:
-            rc = RotationalController(port=port)
-            
             # Send command
             cmd_json = json.dumps(command_dict)
-            self._handle_worker_status(f"→ Arduino ({port}): {cmd_json}")
-            
+            try:
+                self._handle_worker_status(f"→ Arduino ({port}): {cmd_json}")
+            except Exception:
+                pass
+
+            t0 = time.time()
             rc.arduino.write((cmd_json + "\n").encode("utf-8"))
             rc.arduino.flush()
-            time.sleep(0.1)  # Small delay for Arduino to process
-            
+            try:
+                self._handle_worker_status(f"Wrote command in {time.time()-t0:.3f}s")
+            except Exception:
+                pass
+            time.sleep(0.05)
+
             # Read response(s) - Arduino may send multiple lines
             responses = []
             start_time = time.time()
@@ -1864,36 +2058,40 @@ class Ui(QMainWindow):
                     if rc.arduino.in_waiting > 0:
                         line = rc.arduino.readline().decode('utf-8', errors='ignore').strip()
                         if line:
-                            self._handle_worker_status(f"← Arduino: {line}")
+                            try:
+                                self._handle_worker_status(f"← Arduino: {line}")
+                            except Exception:
+                                pass
                             try:
                                 resp_json = json.loads(line)
                                 responses.append(resp_json)
-                                # If we get an OK or ERROR status, consider command complete
                                 if resp_json.get("status") in ["OK", "ERROR"]:
                                     return (True, responses, None)
                             except json.JSONDecodeError:
-                                # Non-JSON response, just log it
                                 pass
-                    time.sleep(0.05)
-                except Exception as e:
+                    time.sleep(0.02)
+                except Exception:
                     break
-            
-            # If we got here, timeout or no clear response
+
             if responses:
                 return (True, responses, None)
             else:
                 return (False, None, "No response from Arduino")
-                
+
         except Exception as e:
             error_msg = f"Arduino communication error: {e}"
-            self._handle_worker_status(error_msg)
-            return (False, None, error_msg)
-        finally:
             try:
-                if rc is not None and getattr(rc, 'arduino', None):
-                    rc.arduino.close()
+                self._handle_worker_status(error_msg)
             except Exception:
                 pass
+            return (False, None, error_msg)
+        finally:
+            if created_locally:
+                try:
+                    if getattr(rc, 'arduino', None):
+                        rc.arduino.close()
+                except Exception:
+                    pass
 
     def _on_batch_finished(self):
         """Handle a finished batch: rotate if more batches remain, otherwise finalize."""
