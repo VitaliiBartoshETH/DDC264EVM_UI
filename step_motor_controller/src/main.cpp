@@ -249,6 +249,19 @@ void loop()
         {
             stepper.enable_motor();
         }
+        if (strcmp(command, "run continuous") == 0) {
+            uint16_t delay_us = doc["delay"] | DELAY_MICROS;
+            uint8_t dir = doc["dir"] | 1;
+            stepper.start_continuous(dir, delay_us);
+            Serial.println("{\"status\":\"OK\",\"msg\":\"Continuous started\"}");
+        } else if (strcmp(command, "stop") == 0) {
+            stepper.stop();
+            Serial.println("{\"status\":\"OK\",\"msg\":\"Stopped\"}");
+        } else if (strcmp(command, "set speed") == 0) {
+            uint16_t delay_us = doc["delay"] | DELAY_MICROS;
+            stepper.set_speed(delay_us);    
+            Serial.println("{\"status\":\"OK\",\"msg\":\"Speed updated\"}");
+        }
 
         
 

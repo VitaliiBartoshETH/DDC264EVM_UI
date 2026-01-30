@@ -417,40 +417,62 @@ class FPGAControl:
             samples_per_channel = reads // 2
 
             bit_rate = next(k for k, v in self.bit_rates.items() if v == self.DDCbit8)
+
+            # Write A integrator samples. The device may return A-first or B-first sequencing
+            # indicated by all_data_aorbfirst (0 = A-first, 1 = B-first).
             for ch in range(channels - 1, -1, -1):
                 prefix = "0" if (ch + 1) < 10 else ""
 
                 for sample_idx in range(samples_per_channel):
-                    data_idx_a = sample_idx * channels + ch
-
                     if all_data_aorbfirst == 0:
-                        if data_idx_a < len(all_data):
-                            dataFile.write(
-                                f"{prefix}{ch+1}A, {sample_idx}, {all_data[data_idx_a]}, {0}, {0}, {bit_rate}\n"
-                            )
+                        # A block is first
+                        data_idx_a = sample_idx * channels + ch
                     else:
-                        if data_idx_a < len(all_data):
-                            dataFile.write(
-                                f"{prefix}{ch+1}A, {sample_idx}, {all_data[data_idx_a]}, {0}, {0}, {bit_rate}\n"
-                            )
+                        # B block is first, so A samples are in the second half
+                        data_idx_a = (sample_idx + samples_per_channel) * channels + ch
 
+                    if data_idx_a < len(all_data):
+                        dataFile.write(
+                            f"{prefix}{ch+1}A, {sample_idx}, {all_data[data_idx_a]}, {0}, {0}, {bit_rate}\n"
+                        )
+
+            # Write B integrator samples, using complementary indexing
             for ch in range(channels - 1, -1, -1):
                 prefix = "0" if (ch + 1) < 10 else ""
 
                 for sample_idx in range(samples_per_channel):
-                    data_idx_b = (sample_idx + samples_per_channel) * channels + ch
-
                     if all_data_aorbfirst == 0:
-                        if data_idx_b < len(all_data):
-                            dataFile.write(
-                                f"{prefix}{ch+1}B, {sample_idx}, {all_data[data_idx_b]}, {0}, {0}, {bit_rate}\n"
-                            )
+                        # B block is second
+                        data_idx_b = (sample_idx + samples_per_channel) * channels + ch
                     else:
-                        # When B comes first, we need to handle the indexing differently
-                        if data_idx_b < len(all_data):
-                            dataFile.write(
-                                f"{prefix}{ch+1}B, {sample_idx}, {all_data[data_idx_b]}, {0}, {0}, {bit_rate}\n"
-                            )
+                        # B block is first
+                        data_idx_b = sample_idx * channels + ch
+
+                    if data_idx_b < len(all_data):
+                        dataFile.write(
+                            f"{prefix}{ch+1}B, {sample_idx}, {all_data[data_idx_b]}, {0}, {0}, {bit_rate}\n"
+                        )
+
+            # Basic validation: ensure that we wrote the expected number of samples per channel/integrator
+            # (useful as a sanity check; don't raise here to avoid breaking callers)
+            try:
+                expected_per = samples_per_channel
+                # Rewind and count lines per key
+                dataFile.flush()
+                # file is closed after with-block; do a quick check by reopening
+                written_counts = {}
+                with open(filename, "r") as checkf:
+                    for ln in checkf:
+                        key = ln.split(",")[0].strip()
+                        written_counts[key] = written_counts.get(key, 0) + 1
+                # Optionally log a warning for missing / incomplete channels
+                incomplete = [k for k, v in written_counts.items() if v != expected_per]
+                if incomplete:
+                    # Not raising, but return a helpful message
+                    return f"File {filename} saved (but incomplete counts for some channels)"
+            except Exception:
+                # If validation fails, silently continue and return success string as before
+                pass
 
         return f"File {filename} was saved successfully"
 

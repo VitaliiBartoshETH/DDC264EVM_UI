@@ -1,6 +1,6 @@
 from PyQt5 import uic
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QThread, Qt, QTimer
-from PyQt5.QtWidgets import QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QMessageBox, QPushButton, QCheckBox, QDialog, QLabel, QGridLayout, QLineEdit, QWidget
+from PyQt5.QtWidgets import QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QMessageBox, QPushButton, QCheckBox, QDialog, QLabel, QGridLayout, QLineEdit, QWidget, QDoubleSpinBox, QComboBox, QSizePolicy
 from tools import FPGAControl
 from rotational_control import RotationalController
 import pyqtgraph as pg
@@ -794,6 +794,73 @@ class Ui(QMainWindow):
             self.connectArduinoButton = QPushButton("Connect Arduino", self)
             self.connectArduinoButton.setFixedWidth(120)
             self.connectArduinoButton.clicked.connect(self._on_connect_arduino_clicked)
+            
+            # REV controls: time per revolution, computed delay, start/stop
+            self.stepperRevWidget = QWidget(self)
+            # keep horizontal expansion minimal so main window width does not grow
+            try:
+                self.stepperRevWidget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+                # Prevent REV row from forcing the main window to widen: cap its max width
+                try:
+                    cw = self.centralWidget().width() if getattr(self, 'centralWidget', None) and self.centralWidget() is not None else 800
+                    self.stepperRevWidget.setMaximumWidth(max(400, cw - 40))
+                except Exception:
+                    # fallback to a reasonable maximum
+                    try:
+                        self.stepperRevWidget.setMaximumWidth(800)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            self.stepperRevLayout = QHBoxLayout(self.stepperRevWidget)
+            self.stepperRevLayout.setContentsMargins(0, 0, 0, 0)
+            self.stepperRevLayout.setSpacing(6)
+
+            self.revTimeLabel = QLabel("REV time (ms):", self)
+            self.revTimeSpin = QDoubleSpinBox(self)
+            # time per revolution in milliseconds; allow sub-ms values
+            self.revTimeSpin.setRange(0.001, 36000000.0)
+            self.revTimeSpin.setSingleStep(0.1)
+            self.revTimeSpin.setDecimals(3)
+            self.revTimeSpin.setValue(1000.0)
+            self.revTimeSpin.setFixedWidth(100)
+
+            self.revDirCombo = QComboBox(self)
+            self.revDirCombo.addItems(["CW", "CCW"])
+            self.revDirCombo.setFixedWidth(80)
+
+            self.revDelayLabel = QLabel("Delay: - µs", self)
+            self.revDelayLabel.setFixedWidth(140)
+
+            self.revStartButton = QPushButton("REV start", self)
+            self.revStopButton = QPushButton("REV stop", self)
+            self.revStartButton.setFixedWidth(90)
+            self.revStopButton.setFixedWidth(90)
+
+            # push REV controls to the right within their row
+            self.stepperRevLayout.addStretch()
+            self.stepperRevLayout.addWidget(self.revTimeLabel)
+            self.stepperRevLayout.addWidget(self.revTimeSpin)
+            self.stepperRevLayout.addWidget(self.revDirCombo)
+            self.stepperRevLayout.addWidget(self.revDelayLabel)
+            self.stepperRevLayout.addWidget(self.revStartButton)
+            self.stepperRevLayout.addWidget(self.revStopButton)
+
+            # Wire handlers
+            try:
+                self.revTimeSpin.valueChanged.connect(self._update_rev_delay_display)
+            except Exception:
+                pass
+            try:
+                self.revStartButton.clicked.connect(self._on_rev_start_clicked)
+                self.revStopButton.clicked.connect(self._on_rev_stop_clicked)
+            except Exception:
+                pass
+            try:
+                # initialize display
+                self._update_rev_delay_display()
+            except Exception:
+                pass
 
             # Create a horizontal layout container for all stepper motor controls
             self.stepperControlWidget = QWidget(self)
@@ -819,6 +886,17 @@ class Ui(QMainWindow):
                 self._update_arduino_status_label()
             except Exception:
                 pass
+
+            # Combine stepper control row and REV row into a single widget (vertical)
+            try:
+                self.stepperCombinedWidget = QWidget(self)
+                combinedLayout = QVBoxLayout(self.stepperCombinedWidget)
+                combinedLayout.setContentsMargins(0, 0, 0, 0)
+                combinedLayout.setSpacing(2)
+                combinedLayout.addWidget(self.stepperControlWidget)
+                combinedLayout.addWidget(self.stepperRevWidget)
+            except Exception:
+                self.stepperCombinedWidget = None
 
             # Try to find the layout that holds getData and insert both
             parent = None
@@ -946,9 +1024,16 @@ class Ui(QMainWindow):
                         if not placed_auto:
                             main_layout.addWidget(self.autoRecover)
                             placed_auto = True
-                        # Add the stepper control container widget as a single row
+                        # Add the stepper control + REV combined container as a single block
                         try:
-                            main_layout.addWidget(self.stepperControlWidget)
+                            if getattr(self, 'stepperCombinedWidget', None) is not None:
+                                main_layout.addWidget(self.stepperCombinedWidget)
+                            else:
+                                main_layout.addWidget(self.stepperControlWidget)
+                                try:
+                                    main_layout.addWidget(self.stepperRevWidget, alignment=Qt.AlignRight)
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                 except Exception:
@@ -967,10 +1052,41 @@ class Ui(QMainWindow):
                     pass
             # ensure rotation controls are visible if placement failed
             try:
-                if not getattr(self, 'stepperControlWidget', None):
-                    pass
+                if getattr(self, 'stepperCombinedWidget', None) is not None:
+                    try:
+                        self.stepperCombinedWidget.show()
+                    except Exception:
+                        pass
                 else:
-                    self.stepperControlWidget.show()
+                    if not getattr(self, 'stepperControlWidget', None):
+                        pass
+                    else:
+                        self.stepperControlWidget.show()
+            except Exception:
+                pass
+
+            # Ensure stepper controls and REV row are present in the central layout
+            try:
+                main_layout = self.centralWidget().layout()
+                if main_layout is not None:
+                    # add stepperControlWidget if not already present
+                    found = False
+                    for i in range(main_layout.count()):
+                        item = main_layout.itemAt(i)
+                        try:
+                            if item and item.widget() is self.stepperControlWidget:
+                                found = True
+                                break
+                        except Exception:
+                            continue
+                    if not found:
+                        try:
+                            if getattr(self, 'stepperCombinedWidget', None) is not None:
+                                main_layout.addWidget(self.stepperCombinedWidget, alignment=Qt.AlignRight)
+                            else:
+                                main_layout.addWidget(self.stepperControlWidget)
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
@@ -1186,6 +1302,68 @@ class Ui(QMainWindow):
                 self._update_arduino_status_label()
             except Exception:
                 pass
+
+    def _update_rev_delay_display(self):
+        """Recalculate and show the pulse delay (microseconds) for the requested revolution time in milliseconds."""
+        try:
+            # total microsteps per revolution on the hardware (matches Arduino config)
+            steps_per_rev = 25600.0
+            t = float(self.revTimeSpin.value())
+            if t <= 0:
+                self.revDelayLabel.setText("Delay: - µs")
+                return
+            # Each step period ~= 2 * DELAY_MICROS (pulse high + low). Compute DELAY_MICROS
+            # rev time is in milliseconds -> convert to microseconds: t*1e3
+            delay_us = int((t * 1e3) / (2.0 * steps_per_rev))
+            self.revDelayLabel.setText(f"Delay: {delay_us} µs")
+        except Exception:
+            try:
+                self.revDelayLabel.setText("Delay: - µs")
+            except Exception:
+                pass
+
+    def _on_rev_start_clicked(self):
+        """Start continuous rotation using Arduino JSON command.
+
+        Computes delay from revTimeSpin (ms) and sends: {"command":"run continuous","dir":0|1,"delay":<us>}.
+        """
+        try:
+            # compute delay
+            steps_per_rev = 25600.0
+            t = float(self.revTimeSpin.value())
+            if t <= 0:
+                QMessageBox.warning(self, "REV start", "Invalid revolution time")
+                return
+            # rev time is in milliseconds -> convert to microseconds: t*1e3
+            delay_us = int((t * 1e3) / (2.0 * steps_per_rev))
+            dir_txt = self.revDirCombo.currentText()
+            dir_val = 0 if dir_txt == "CW" else 1
+            cmd = {"command": "run continuous", "dir": dir_val, "delay": int(delay_us)}
+            success, responses, error = self._send_arduino_command(cmd, timeout=3.0)
+            if success:
+                try:
+                    self._handle_worker_status(f"Started continuous rotation (delay {delay_us} µs)")
+                except Exception:
+                    pass
+            else:
+                QMessageBox.warning(self, "REV start", f"Failed to start rotation: {error}")
+        except Exception as e:
+            QMessageBox.warning(self, "REV start", f"Error: {e}")
+
+    def _on_rev_stop_clicked(self):
+        """Stop continuous rotation via Arduino JSON command {"command":"stop"}."""
+        try:
+            cmd = {"command": "stop"}
+            success, responses, error = self._send_arduino_command(cmd, timeout=2.0)
+            if success:
+                try:
+                    self._handle_worker_status("Stopped continuous rotation")
+                except Exception:
+                    pass
+            else:
+                QMessageBox.warning(self, "REV stop", f"Failed to stop rotation: {error}")
+        except Exception as e:
+            QMessageBox.warning(self, "REV stop", f"Error: {e}")
 
     def _close_rotation_controller(self):
         """Close and clear the persistent rotation controller if present."""
