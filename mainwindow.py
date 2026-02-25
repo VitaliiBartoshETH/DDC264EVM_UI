@@ -577,12 +577,16 @@ class Ui(QMainWindow):
         self.decoderMatrixLabel.setText("decoder_matrix.txt")
         self.decoder_matrix = np.zeros((16, 16), dtype=int)
         self.load_decoder_matrix(self.decoderMatrixLabel.text())
+        
+        # Load 1D detector decoder matrix
+        self.decoder_matrix_1d = np.zeros(128, dtype=int)
+        self.load_decoder_matrix_1d("decoder_matrix_sample1.txt")
 
         self.image_view = self.imageWidget.addViewBox()
-        self.image_view.setAspectLocked(False)
+        self.image_view.setAspectLocked(True)
         self.img_item = pg.ImageItem(np.zeros((16, 16)))
         self.image_view.addItem(self.img_item)
-        self.image_view.setRange(self.img_item.boundingRect(), padding=0)
+        self.image_view.autoRange()
         self.image_view.setMouseEnabled(x=False, y=False)
 
         # Try to make the underlying ViewBox background transparent as well.
@@ -628,10 +632,10 @@ class Ui(QMainWindow):
         
 
         self.mix_view = self.mixWidget.addViewBox()
-        self.mix_view.setAspectLocked(False)
+        self.mix_view.setAspectLocked(True)
         self.mix_img_item = pg.ImageItem(np.zeros((16, 16)))
         self.mix_view.addItem(self.mix_img_item)
-        self.mix_view.setRange(self.mix_img_item.boundingRect(), padding=0)
+        self.mix_view.autoRange()
         self.mix_view.setMouseEnabled(x=False, y=False)
         self.mix_img_item.setLookupTable(lut)
         self.mix_color_bar = pg.ColorBarItem(
@@ -668,6 +672,13 @@ class Ui(QMainWindow):
         self.dark_current_data = np.zeros((16, 16))
         self.open_beam_data = np.zeros((16, 16))
         self.open_beam_baseline = np.zeros((16, 16))  # Store open beam baseline for mode 3
+        
+        # 1D detector arrays
+        self.image_data_1d = np.zeros(128)
+        self.dark_current_data_1d = np.zeros(128)
+        self.open_beam_data_1d = np.zeros(128)
+        self.open_beam_baseline_1d = np.zeros(128)
+        
         self.readFilePath.setText("")
 
         self.openBeam.setChecked(False)
@@ -742,6 +753,26 @@ class Ui(QMainWindow):
         self.openBeam.toggled.connect(self.build_image)
         self.openBeam.clicked.connect(self.build_image)
         self.darkCurrent.clicked.connect(self.build_image)
+        
+        # Add 1D detector checkbox
+        self.detector1D = QCheckBox("1D detector", self)
+        self.detector1D.setChecked(False)
+        try:
+            if hasattr(self, 'horizontalLayout_21'):
+                build_index = -1
+                for i in range(self.horizontalLayout_21.count()):
+                    item = self.horizontalLayout_21.itemAt(i)
+                    if item and item.widget() is self.buildImage:
+                        build_index = i
+                        break
+                if build_index >= 0:
+                    self.horizontalLayout_21.insertWidget(build_index, self.detector1D)
+                else:
+                    self.horizontalLayout_21.addWidget(self.detector1D)
+        except Exception:
+            pass
+        
+        self.detector1D.toggled.connect(self.build_image)
 
         self.show()
 
@@ -2446,28 +2477,51 @@ class Ui(QMainWindow):
                     self.statusBar().showMessage("Invalid edge values")
                     return np.zeros((16, 16))
 
-                array_image = np.zeros((16, 16))
-                array_dark = np.zeros((16, 16))
+                # Always reconstruct BOTH 1D and 2D, regardless of current mode
+                # 1D reconstruction
+                array_image_1d = np.zeros(128)
+                array_dark_1d = np.zeros(128)
+                for i in range(128):
+                    ch = int(self.decoder_matrix_1d[i])
+                    if ch >= 10:
+                        key = f"{ch}A"
+                    else:
+                        key = f"0{ch}A"
+                    if key in peaks:
+                        array_image_1d[i] = peaks[key][0]
+                        array_dark_1d[i] = peaks[key][1]
+                
+                # 2D reconstruction
+                array_image_2d = np.zeros((16, 16))
+                array_dark_2d = np.zeros((16, 16))
                 for i in range(16):
                     for j in range(16):
                         if self.decoder_matrix[i, j] >= 10:
-                            array_image[i, j] = peaks[f"{self.decoder_matrix[i,j]}A"][0]
-                            array_dark[i, j] = peaks[f"{self.decoder_matrix[i,j]}A"][1]
+                            array_image_2d[i, j] = peaks[f"{self.decoder_matrix[i,j]}A"][0]
+                            array_dark_2d[i, j] = peaks[f"{self.decoder_matrix[i,j]}A"][1]
                         else:
-                            array_image[i, j] = peaks[f"0{self.decoder_matrix[i,j]}A"][
-                                0
-                            ]
-                            array_dark[i, j] = peaks[f"0{self.decoder_matrix[i,j]}A"][1]
-                array_image = np.rot90(array_image, 3)
-                array_dark = np.rot90(array_dark, 3)
+                            array_image_2d[i, j] = peaks[f"0{self.decoder_matrix[i,j]}A"][0]
+                            array_dark_2d[i, j] = peaks[f"0{self.decoder_matrix[i,j]}A"][1]
+                array_image_2d = np.rot90(array_image_2d, 3)
+                array_dark_2d = np.rot90(array_dark_2d, 3)
 
-                setattr(self, data_attr, array_image)
+                # Store BOTH 1D and 2D data always, regardless of current mode
+                # This allows switching modes without reloading files
+                if data_attr == "image_data":
+                    self.image_data_1d = np.array(array_image_1d, dtype=float)
+                    self.image_data = np.array(array_image_2d, dtype=float)
+                elif data_attr == "open_beam_data":
+                    self.open_beam_data_1d = np.array(array_image_1d, dtype=float)
+                    self.open_beam_data = np.array(array_image_2d, dtype=float)
+
                 if update_dark:
-                    setattr(self, "dark_current_data", array_dark)
-                
+                    self.dark_current_data_1d = np.array(array_dark_1d, dtype=float)
+                    self.dark_current_data = np.array(array_dark_2d, dtype=float)
+
                 # If loading open beam file, also store its baseline for mode 3
                 if data_attr == "open_beam_data":
-                    setattr(self, "open_beam_baseline", array_dark)
+                    self.open_beam_baseline_1d = np.array(array_dark_1d, dtype=float)
+                    self.open_beam_baseline = np.array(array_dark_2d, dtype=float)
 
             label.setText(file_path.split("/")[-1])
         except ValueError:
@@ -2494,41 +2548,59 @@ class Ui(QMainWindow):
         except ValueError:
             self.statusBar().showMessage("Invalid file")
 
+    def load_decoder_matrix_1d(self, file_path):
+        """Load 1D detector decoder matrix (128 channels)."""
+        try:
+            with open(file_path) as f:
+                lines = f.readlines()
+                for i, line in enumerate(lines):
+                    if i < 128:
+                        self.decoder_matrix_1d[i] = int(line.strip())
+        except Exception as e:
+            self.statusBar().showMessage(f"Failed to load 1D decoder matrix: {e}")
+
     def build_image(self):
         norm_mode = self.useNormalization.currentText()
+        is_1d = self.detector1D.isChecked()
         
         # Helper function to set image levels respecting manual scale input
         def set_image_levels(img_item, color_bar, image_data, low_field, upper_field, low_manual_flag, upper_manual_flag):
             """Set image and colorbar levels, respecting manual user input if set."""
+            # For 1D arrays, reshape to 2D for display (128,) -> (128, 1) for vertical orientation
+            if image_data.ndim == 1:
+                display_data = image_data.reshape(-1, 1)
+            else:
+                display_data = image_data
+            
             # Check if user has manually set the scales
             if low_manual_flag or upper_manual_flag:
                 # Use manual values if they exist
                 try:
-                    low_val = float(low_field.text()) if low_manual_flag else image_data.min()
-                    upper_val = float(upper_field.text()) if upper_manual_flag else image_data.max()
+                    low_val = float(low_field.text()) if low_manual_flag else display_data.min()
+                    upper_val = float(upper_field.text()) if upper_manual_flag else display_data.max()
                     img_item.setLevels((low_val, upper_val))
                     color_bar.setLevels((low_val, upper_val))
                     # Don't update text fields - keep user's manual values
                 except ValueError:
                     # If manual value is invalid, fall back to auto-detection
-                    if np.isnan(image_data.min()) or np.isnan(image_data.max()):
+                    if np.isnan(display_data.min()) or np.isnan(display_data.max()):
                         img_item.setLevels((0, 1))
                         color_bar.setLevels((0, 1))
                     else:
-                        img_item.setLevels((image_data.min(), image_data.max()))
-                        color_bar.setLevels((image_data.min(), image_data.max()))
+                        img_item.setLevels((display_data.min(), display_data.max()))
+                        color_bar.setLevels((display_data.min(), display_data.max()))
             else:
                 # Auto-detection (original behavior)
-                if np.isnan(image_data.min()) or np.isnan(image_data.max()):
+                if np.isnan(display_data.min()) or np.isnan(display_data.max()):
                     img_item.setLevels((0, 1))
                     color_bar.setLevels((0, 1))
                     upper_field.setText("1")
                     low_field.setText("0")
                 else:
-                    img_item.setLevels((image_data.min(), image_data.max()))
-                    color_bar.setLevels((image_data.min(), image_data.max()))
-                    upper_field.setText(f"{image_data.max()}")
-                    low_field.setText(f"{image_data.min()}")
+                    img_item.setLevels((display_data.min(), display_data.max()))
+                    color_bar.setLevels((display_data.min(), display_data.max()))
+                    upper_field.setText(f"{display_data.max()}")
+                    low_field.setText(f"{display_data.min()}")
         
         # Process left image based on normalization mode
         if norm_mode == "none":
@@ -2536,14 +2608,26 @@ class Ui(QMainWindow):
             if not self.image_file:
                 self.statusBar().showMessage("Please select image file")
             else:
-                left_image = (
-                    self.image_data
-                    / float(self.pixelX.text())
-                    / float(self.pixelY.text())
-                    / float(self.ConvLowInt.text())
-                    * 1e15
-                )
+                if is_1d:
+                    # Apply same physical conversion as 2D to 1D stripes, then tile to 128x128
+                    temp = (
+                        self.image_data_1d
+                        / float(self.pixelX.text())
+                        / float(self.pixelY.text())
+                        / float(self.ConvLowInt.text())
+                        * 1e15
+                    ).reshape(-1, 1)
+                    left_image = np.tile(temp, (1, 128))
+                else:
+                    left_image = (
+                        self.image_data
+                        / float(self.pixelX.text())
+                        / float(self.pixelY.text())
+                        / float(self.ConvLowInt.text())
+                        * 1e15
+                    )
                 self.img_item.setImage(left_image)
+                self.image_view.autoRange()
                 set_image_levels(
                     self.img_item, self.color_bar, left_image,
                     self.imageLowScale, self.imageUpperScale,
@@ -2557,12 +2641,23 @@ class Ui(QMainWindow):
                     "Please select both image and open beam files"
                 )
             else:
-                left_image = self.image_data / self.open_beam_data
+                if is_1d:
+                    # avoid division by zero, tile to 128x128
+                    denom = np.array(self.open_beam_data_1d, dtype=float)
+                    denom[denom == 0] = np.nan
+                    temp = (self.image_data_1d / denom).reshape(-1, 1)
+                    left_image = np.tile(temp, (1, 128))
+
+                else:
+                    denom2 = np.array(self.open_beam_data, dtype=float)
+                    denom2[denom2 == 0] = np.nan
+                    left_image = self.image_data / denom2
 
                 if self.useThreshold.isChecked():
                     left_image[left_image > 1] = 1
 
                 self.img_item.setImage(left_image)
+                self.image_view.autoRange()
                 set_image_levels(
                     self.img_item, self.color_bar, left_image,
                     self.imageLowScale, self.imageUpperScale,
@@ -2577,18 +2672,29 @@ class Ui(QMainWindow):
                     "Please select both image and open beam files"
                 )
             else:
-                # self.image_data contains right_mean from image file (from load_file mode 3)
-                # self.open_beam_baseline contains left_mean from open beam file
-                # self.open_beam_data contains (right_mean - left_mean) from open beam file
-                
-                # Calculate baseline-corrected image signal using open beam's baseline
-                image_signal = self.image_data - self.open_beam_baseline
-                left_image = image_signal / self.open_beam_data
+                if is_1d:
+                    # Calculate baseline-corrected image signal using open beam's baseline, tile to 128x128
+                    image_signal = self.image_data_1d - self.open_beam_baseline_1d
+                    denom = np.array(self.open_beam_data_1d, dtype=float)
+                    denom[denom == 0] = np.nan
+                    temp = (image_signal / denom).reshape(-1, 1)
+                    left_image = np.tile(temp, (1, 128))
+                else:
+                    # self.image_data contains right_mean from image file (from load_file mode 3)
+                    # self.open_beam_baseline contains left_mean from open beam file
+                    # self.open_beam_data contains (right_mean - left_mean) from open beam file
+                    
+                    # Calculate baseline-corrected image signal using open beam's baseline
+                    image_signal = self.image_data - self.open_beam_baseline
+                    denom2 = np.array(self.open_beam_data, dtype=float)
+                    denom2[denom2 == 0] = np.nan
+                    left_image = image_signal / denom2
 
                 if self.useThreshold.isChecked():
                     left_image[left_image > 1] = 1
 
                 self.img_item.setImage(left_image)
+                self.image_view.autoRange()
                 set_image_levels(
                     self.img_item, self.color_bar, left_image,
                     self.imageLowScale, self.imageUpperScale,
@@ -2602,13 +2708,22 @@ class Ui(QMainWindow):
                     "Please select both image and open beam files"
                 )
             else:
-                # Both files have full mean values (no baseline subtraction)
-                left_image = self.image_data / self.open_beam_data
+                if is_1d:
+                    denom = np.array(self.open_beam_data_1d, dtype=float)
+                    denom[denom == 0] = np.nan
+                    temp = (self.image_data_1d / denom).reshape(-1, 1)
+                    left_image = np.tile(temp, (1, 128))
+                else:
+                    # Both files have full mean values (no baseline subtraction)
+                    denom2 = np.array(self.open_beam_data, dtype=float)
+                    denom2[denom2 == 0] = np.nan
+                    left_image = self.image_data / denom2
 
                 if self.useThreshold.isChecked():
                     left_image[left_image > 1] = 1
 
                 self.img_item.setImage(left_image)
+                self.image_view.autoRange()
                 set_image_levels(
                     self.img_item, self.color_bar, left_image,
                     self.imageLowScale, self.imageUpperScale,
@@ -2619,14 +2734,25 @@ class Ui(QMainWindow):
             if not self.image_file:
                 self.statusBar().showMessage("Please select image file")
             else:
-                right_image = (
-                    self.dark_current_data
-                    / float(self.pixelX.text())
-                    / float(self.pixelY.text())
-                    / float(self.ConvLowInt.text())
-                    * 1e15
-                )
+                if is_1d:
+                    temp = (
+                        self.dark_current_data_1d
+                        / float(self.pixelX.text())
+                        / float(self.pixelY.text())
+                        / float(self.ConvLowInt.text())
+                        * 1e15
+                    ).reshape(-1, 1)
+                    right_image = np.tile(temp, (1, 128))
+                else:
+                    right_image = (
+                        self.dark_current_data
+                        / float(self.pixelX.text())
+                        / float(self.pixelY.text())
+                        / float(self.ConvLowInt.text())
+                        * 1e15
+                    )
                 self.mix_img_item.setImage(right_image)
+                self.mix_view.autoRange()
                 set_image_levels(
                     self.mix_img_item, self.mix_color_bar, right_image,
                     self.mixLowScale, self.mixUpperScale,
@@ -2637,14 +2763,25 @@ class Ui(QMainWindow):
             if not self.open_beam_file:
                 self.statusBar().showMessage("Please select open beam file")
             else:
-                right_image = (
-                    self.open_beam_data
-                    / float(self.pixelX.text())
-                    / float(self.pixelY.text())
-                    / float(self.ConvLowInt.text())
-                    * 1e15
-                )
+                if is_1d:
+                    temp = (
+                        self.open_beam_data_1d
+                        / float(self.pixelX.text())
+                        / float(self.pixelY.text())
+                        / float(self.ConvLowInt.text())
+                        * 1e15
+                    ).reshape(-1, 1)
+                    right_image = np.tile(temp, (1, 128))
+                else:
+                    right_image = (
+                        self.open_beam_data
+                        / float(self.pixelX.text())
+                        / float(self.pixelY.text())
+                        / float(self.ConvLowInt.text())
+                        * 1e15
+                    )
                 self.mix_img_item.setImage(right_image)
+                self.mix_view.autoRange()
                 set_image_levels(
                     self.mix_img_item, self.mix_color_bar, right_image,
                     self.mixLowScale, self.mixUpperScale,
