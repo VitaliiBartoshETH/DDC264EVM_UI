@@ -83,6 +83,15 @@ for i in range(128):
 - 1D arrays (128,) are reshaped to (128, 1) then **tiled to (128, 128)**
 - Each stripe stretches horizontally to fill square display
 - Physical conversion applied: `value / (pixelX × pixelY × ConvLowInt) × 1e15`
+- Pixel‑size fields are automatically set to **1.56 µm** when 1D mode is
+  enabled (previous values are restored when returning to 2D).
+- **Layout change:** the two image panes are stacked vertically when 1D
+  mode is active (`horizontalLayout_26` direction switched to TopToBottom),
+  allowing them to span the full window width and produce long horizontal
+  stripes. Aspect locking is disabled in 1D so the images can stretch freely.
+  The layout/orientation is adjusted **immediately when the checkbox is
+  toggled**; the image is rebuilt automatically so no extra "Build image"
+  click is required.
 
 ### Important Implementation Details
 
@@ -710,6 +719,13 @@ decoder_matrix_sample1.txt — 128 lines × 1 channel
 4. Consider caching decoded images to speed up mode switching
 
 ---
+
+## Recent changes
+
+- **27 Feb 2026**: 1‑D detector mode now overrides the pixel‑size fields to
+  1.56 µm during normalization and restores the user's previous values when
+  switching back to 2‑D.  The toggle handler also rebuilds the image and
+  updates layout immediately, so the new size is used without extra clicks.
 
 ## Quick Reference: Adding a New Normalization Mode
 

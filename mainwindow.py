@@ -772,7 +772,8 @@ class Ui(QMainWindow):
         except Exception:
             pass
         
-        self.detector1D.toggled.connect(self.build_image)
+        # toggle handler does both layout update and image rebuild
+        self.detector1D.toggled.connect(self._on_1d_toggled)
 
         self.show()
 
@@ -2209,6 +2210,103 @@ class Ui(QMainWindow):
                 except Exception:
                     pass
 
+    def _update_1d_layout(self, is_1d: bool):
+        """Adjust the image pane layout and aspect locking based on mode.
+
+        Called both from the 1D checkbox handler and at the start of
+        :meth:`build_image`. When ``is_1d`` is true the horizontal container
+        is switched to a vertical stack and aspect locking disabled.
+        """
+        try:
+            container = self.findChild(QHBoxLayout, "horizontalLayout_26")
+            if container is not None:
+                from PyQt5.QtWidgets import QBoxLayout
+                container.setDirection(
+                    QBoxLayout.TopToBottom if is_1d else QBoxLayout.LeftToRight
+                )
+                # ensure the containing widget updates its layout
+                try:
+                    w = container.parentWidget()
+                    if w is not None:
+                        w.updateGeometry()
+                        w.repaint()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            self.image_view.setAspectLocked(not is_1d)
+            self.mix_view.setAspectLocked(not is_1d)
+        except Exception:
+            pass
+
+    def _on_1d_toggled(self, checked: bool):
+        """Slot for detector1D checkbox toggle.
+
+        Updates the layout immediately and rebuilds the image so the change
+        is visible without needing to press "Build image" again.
+
+        The 1‑D detector uses a different effective pixel size (1.56) than the
+        default 2‑D mode (0.36).  When the mode is enabled we overwrite the
+        pixel size fields and save the previous values so they can be restored
+        when the mode is turned off.  The new entry is then picked up by the
+        normal `build_image` calculations which always read the QLineEdit
+        contents.
+        """
+        # adjust pixel size fields before rebuilding
+        try:
+            if checked:
+                # save the user's previous values only once
+                if not hasattr(self, '_backup_pixel_sizes'):
+                    self._backup_pixel_sizes = (
+                        self.pixelX.text(),
+                        self.pixelY.text(),
+                    )
+                self.pixelX.setText("1.56")
+                self.pixelY.setText("1.56")
+            else:
+                if hasattr(self, '_backup_pixel_sizes'):
+                    self.pixelX.setText(self._backup_pixel_sizes[0])
+                    self.pixelY.setText(self._backup_pixel_sizes[1])
+                    delattr(self, '_backup_pixel_sizes')
+        except Exception:
+            pass
+
+        self._update_1d_layout(checked)
+        self.build_image()
+        # Try to reuse a persistent controller if available
+        created_locally = False
+        rc = getattr(self, '_rotation_controller', None)
+        if rc is None:
+            rc = self._ensure_rotation_controller()
+        if rc is None:
+            # fallback: create a temporary controller for this rotation
+            port = self._find_arduino_port() or getattr(self, '_rotation_port', None) or "COM6"
+            try:
+                rc = RotationalController(port=port)
+                created_locally = True
+            except Exception as e:
+                self._handle_worker_status(f"Failed to open rotation controller for rotation: {e}")
+                return
+
+        t0 = time.time()
+        try:
+            self._handle_worker_status(f"Rotating {angle_deg}° (port {getattr(rc, 'arduino', None) and getattr(rc.arduino, 'port', getattr(self, '_rotation_port', 'unknown'))})")
+            rc.rotate(angle_deg)
+            # Add small settling time after motor completes rotation (can be reduced)
+            time.sleep(0.5)
+            try:
+                self._handle_worker_status(f"Rotation complete in {time.time()-t0:.3f}s")
+            except Exception:
+                pass
+        finally:
+            if created_locally:
+                try:
+                    if getattr(rc, 'arduino', None):
+                        rc.arduino.close()
+                except Exception:
+                    pass
+
     def _send_arduino_command(self, command_dict, timeout=5.0):
         """Send a command to Arduino, read and display the response.
         
@@ -2562,6 +2660,11 @@ class Ui(QMainWindow):
     def build_image(self):
         norm_mode = self.useNormalization.currentText()
         is_1d = self.detector1D.isChecked()
+        # ensure layout orientation matches current mode
+        self._update_1d_layout(is_1d)
+        
+        # make sure layout/orientation matches current mode
+        self._update_1d_layout(is_1d)
         
         # Helper function to set image levels respecting manual scale input
         def set_image_levels(img_item, color_bar, image_data, low_field, upper_field, low_manual_flag, upper_manual_flag):
