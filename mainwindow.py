@@ -431,11 +431,11 @@ class Ui(QMainWindow):
         # persistent rotation controller (open once per measurement batch)
         self._rotation_controller = None
         self._rotation_port = None
-        # Open persistent rotation controller for the program lifetime
-        try:
-            self._ensure_rotation_controller()
-        except Exception:
-            pass
+        # NOTE: do not open the rotation controller automatically at startup.
+        # Auto-opening can accidentally connect to the wrong serial device
+        # (the program used to detect a single-port fallback). The controller
+        # will be created when the user clicks the "Connect Arduino" button
+        # or when an operation explicitly needs it.
         try:
             # Update status label if present
             try:
@@ -1255,10 +1255,11 @@ class Ui(QMainWindow):
                 except Exception:
                     pass
 
-            # 3) fallback: if exactly one candidate USB-serial port is present
-            if len(ports) == 1:
-                return ports[0].device
-
+            # 3) Do NOT fall back to returning a single serial port.
+            # Returning the only port on the system is too permissive and may
+            # result in opening unrelated USB-serial devices. Only return a
+            # port when we can reasonably identify an Arduino by VID/PID or
+            # by an explicit 'arduino' substring in the description/hwid.
             return None
         except Exception:
             return None
