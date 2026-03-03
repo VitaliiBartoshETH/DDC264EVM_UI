@@ -424,12 +424,8 @@ class FPGAControl:
                 prefix = "0" if (ch + 1) < 10 else ""
 
                 for sample_idx in range(samples_per_channel):
-                    if all_data_aorbfirst == 0:
-                        # A block is first
-                        data_idx_a = sample_idx * channels + ch
-                    else:
-                        # B block is first, so A samples are in the second half
-                        data_idx_a = (sample_idx + samples_per_channel) * channels + ch
+                    # Always assume A block is first
+                    data_idx_a = sample_idx * channels + ch
 
                     if data_idx_a < len(all_data):
                         dataFile.write(
@@ -441,12 +437,8 @@ class FPGAControl:
                 prefix = "0" if (ch + 1) < 10 else ""
 
                 for sample_idx in range(samples_per_channel):
-                    if all_data_aorbfirst == 0:
-                        # B block is second
-                        data_idx_b = (sample_idx + samples_per_channel) * channels + ch
-                    else:
-                        # B block is first
-                        data_idx_b = sample_idx * channels + ch
+                    # Always assume B block is second
+                    data_idx_b = (sample_idx + samples_per_channel) * channels + ch
 
                     if data_idx_b < len(all_data):
                         dataFile.write(
