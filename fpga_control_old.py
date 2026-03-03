@@ -1,8 +1,5 @@
 import os
 import ctypes
-import subprocess
-import shlex
-import time
 
 
 class FPGAControl:
@@ -56,8 +53,8 @@ class FPGAControl:
         self.HADWARE_TRIGGER = HARDWARE_TRIGGER
         self.CLK_CFG_HI = CLK_CFG_HI
         self.CLK_CFG_LO = CLK_CFG_LO
-        self.CONV_WAIT_LOW = 0
-        self.CONV_WAIT_HIGH = 0
+        self.CONV_WAIT_LOW = 1550
+        self.CONV_WAIT_HIGH = 1550
         self.CLKDELAY_AROUND_CONV = 0
 
         self.DDCbit13 = 0
@@ -85,10 +82,7 @@ class FPGAControl:
             os.path.dirname(os.path.dirname(__file__)), "DDC264EVM_IO.dll"
         )
 
-        # store DLL path for potential reopen/reload operations
-        self.dll_path = dll_path
-
-        self.dll = ctypes.CDLL(self.dll_path)
+        self.dll = ctypes.CDLL(dll_path)
         self.USBdev = self.INT(0)
 
         self.dll.dllID.argtypes = [ctypes.c_char_p, ctypes.c_int]
@@ -148,71 +142,6 @@ class FPGAControl:
             ctypes.POINTER(self.INT),
         ]
         self.dll.EVM_WriteCFGFast.restype = ctypes.c_int
-
-    def _bind_functions(self):
-        """(Re)bind DLL function prototypes. Call after loading a new CDLL object."""
-        # This mirrors the prototypes set in __init__ so they can be rebound after reload.
-        try:
-            self.dll.dllID.argtypes = [ctypes.c_char_p, ctypes.c_int]
-            self.dll.dllID.restype = None
-
-            self.dll.dllCprght.argtypes = [ctypes.c_char_p, ctypes.c_int]
-            self.dll.dllCprght.restype = None
-
-            self.dll.EVM_RegDataOut.argtypes = [
-                ctypes.POINTER(self.INT),
-                ctypes.POINTER(self.INT),
-                ctypes.POINTER(self.INT),
-            ]
-            self.dll.EVM_RegDataOut.restype = self.INT
-
-            self.dll.EVM_ResetDDC.argtypes = [ctypes.POINTER(self.INT)]
-            self.dll.EVM_ResetDDC.restype = ctypes.c_bool
-
-            self.dll.EVM_ClearTriggers.argtypes = [ctypes.POINTER(self.INT)]
-            self.dll.EVM_ClearTriggers.restype = ctypes.c_bool
-
-            self.dll.EVM_DataSequence.argtypes = [
-                ctypes.POINTER(self.INT),
-                ctypes.POINTER(self.BYTE),
-                ctypes.POINTER(self.BYTE),
-            ]
-            self.dll.EVM_DataSequence.restype = ctypes.c_bool
-
-            self.dll.EVM_RegsTransfer.argtypes = [
-                ctypes.POINTER(self.INT),
-                ctypes.POINTER(self.INT),
-                ctypes.POINTER(self.INT),
-                ctypes.POINTER(self.INT),
-            ]
-            self.dll.EVM_RegsTransfer.restype = ctypes.c_long
-
-            self.dll.EVM_RegNameTable.argtypes = [
-                ctypes.c_int,
-                ctypes.c_char_p,
-                ctypes.c_int,
-            ]
-            self.dll.EVM_RegNameTable.restype = ctypes.c_int
-
-            self.dll.EVM_DataCap.argtypes = [
-                ctypes.POINTER(self.INT),
-                self.INT,
-                self.INT,
-                ctypes.POINTER(self.INT),
-                ctypes.POINTER(self.INT),
-            ]
-            self.dll.EVM_DataCap.restype = ctypes.c_long
-
-            self.dll.EVM_WriteCFGFast.argtypes = [
-                ctypes.POINTER(self.INT),
-                ctypes.POINTER(self.BYTE),
-                ctypes.POINTER(self.BYTE),
-                ctypes.POINTER(self.INT),
-            ]
-            self.dll.EVM_WriteCFGFast.restype = ctypes.c_int
-        except Exception:
-            # If rebind fails, do not raise here; callers will see failures when calling.
-            pass
 
     def reset_regs(self):
         for i in range(self.regsSize):
@@ -417,62 +346,40 @@ class FPGAControl:
             samples_per_channel = reads // 2
 
             bit_rate = next(k for k, v in self.bit_rates.items() if v == self.DDCbit8)
-
-            # Write A integrator samples. The device may return A-first or B-first sequencing
-            # indicated by all_data_aorbfirst (0 = A-first, 1 = B-first).
             for ch in range(channels - 1, -1, -1):
                 prefix = "0" if (ch + 1) < 10 else ""
 
                 for sample_idx in range(samples_per_channel):
+                    data_idx_a = sample_idx * channels + ch
+
                     if all_data_aorbfirst == 0:
-                        # A block is first
-                        data_idx_a = sample_idx * channels + ch
+                        if data_idx_a < len(all_data):
+                            dataFile.write(
+                                f"{prefix}{ch+1}A, {sample_idx}, {all_data[data_idx_a]}, {0}, {0}, {bit_rate}\n"
+                            )
                     else:
-                        # B block is first, so A samples are in the second half
-                        data_idx_a = (sample_idx + samples_per_channel) * channels + ch
+                        if data_idx_a < len(all_data):
+                            dataFile.write(
+                                f"{prefix}{ch+1}A, {sample_idx}, {all_data[data_idx_a]}, {0}, {0}, {bit_rate}\n"
+                            )
 
-                    if data_idx_a < len(all_data):
-                        dataFile.write(
-                            f"{prefix}{ch+1}A, {sample_idx}, {all_data[data_idx_a]}, {0}, {0}, {bit_rate}\n"
-                        )
-
-            # Write B integrator samples, using complementary indexing
             for ch in range(channels - 1, -1, -1):
                 prefix = "0" if (ch + 1) < 10 else ""
 
                 for sample_idx in range(samples_per_channel):
+                    data_idx_b = (sample_idx + samples_per_channel) * channels + ch
+
                     if all_data_aorbfirst == 0:
-                        # B block is second
-                        data_idx_b = (sample_idx + samples_per_channel) * channels + ch
+                        if data_idx_b < len(all_data):
+                            dataFile.write(
+                                f"{prefix}{ch+1}B, {sample_idx}, {all_data[data_idx_b]}, {0}, {0}, {bit_rate}\n"
+                            )
                     else:
-                        # B block is first
-                        data_idx_b = sample_idx * channels + ch
-
-                    if data_idx_b < len(all_data):
-                        dataFile.write(
-                            f"{prefix}{ch+1}B, {sample_idx}, {all_data[data_idx_b]}, {0}, {0}, {bit_rate}\n"
-                        )
-
-            # Basic validation: ensure that we wrote the expected number of samples per channel/integrator
-            # (useful as a sanity check; don't raise here to avoid breaking callers)
-            try:
-                expected_per = samples_per_channel
-                # Rewind and count lines per key
-                dataFile.flush()
-                # file is closed after with-block; do a quick check by reopening
-                written_counts = {}
-                with open(filename, "r") as checkf:
-                    for ln in checkf:
-                        key = ln.split(",")[0].strip()
-                        written_counts[key] = written_counts.get(key, 0) + 1
-                # Optionally log a warning for missing / incomplete channels
-                incomplete = [k for k, v in written_counts.items() if v != expected_per]
-                if incomplete:
-                    # Not raising, but return a helpful message
-                    return f"File {filename} saved (but incomplete counts for some channels)"
-            except Exception:
-                # If validation fails, silently continue and return success string as before
-                pass
+                        # When B comes first, we need to handle the indexing differently
+                        if data_idx_b < len(all_data):
+                            dataFile.write(
+                                f"{prefix}{ch+1}B, {sample_idx}, {all_data[data_idx_b]}, {0}, {0}, {bit_rate}\n"
+                            )
 
         return f"File {filename} was saved successfully"
 
@@ -486,159 +393,3 @@ class FPGAControl:
             )
         )
         return value / (2**power - 1) * adc_range
-
-    # --- Recovery / reconnect helpers ---
-    def reopen(self):
-        """Attempt to reload the underlying DLL and rebind prototypes.
-
-        This can help recover from low-level USB/DLL state corruption.
-        Returns True on success, False on failure.
-        """
-        try:
-            # reload CDLL (this may unblock some driver state)
-            self.dll = ctypes.CDLL(self.dll_path)
-            # rebind function prototypes
-            self._bind_functions()
-            return True
-        except Exception:
-            return False
-
-    def reconnect(self):
-        """Higher-level reconnect: attempt DDC reset, clear triggers and re-prepare device.
-
-        Returns True if the sequence completed without exception, False otherwise.
-        """
-        try:
-            try:
-                self.reset_ddc()
-            except Exception:
-                # ignore and continue
-                pass
-            try:
-                self.clear_triggers()
-            except Exception:
-                pass
-            # attempt prepare (write cfg, check results)
-            self.prepare()
-            return True
-        except Exception:
-            return False
-
-    def reinit(self):
-        """Attempt a fuller reinitialization: refresh registers and transfer configured registers.
-
-        Use this when a simple reset/clear doesn't help. Returns True on success.
-        """
-        try:
-            self.refresh()
-            return True
-        except Exception:
-            # as a fallback try reopen + refresh
-            try:
-                if self.reopen():
-                    self.refresh()
-                    return True
-            except Exception:
-                pass
-        return False
-
-    def usb_reset(self):
-        """Alias for reopening the DLL / reloading driver state.
-
-        Some recovery routines call this name; it performs the same action as reopen().
-        """
-        # Prefer a Windows USB re-enumeration if possible (uses VID/PID of device)
-        try:
-            # default VID/PID for DDC264EVM
-            return self.usb_reenumerate(vid="04B4", pid="1004")
-        except Exception:
-            return self.reopen()
-
-    def usb_reenumerate(self, vid="04B4", pid="1004", timeout=5.0, attempts=2):
-        """Attempt to re-enumerate (disable/enable) the USB device using PowerShell.
-
-        This uses PowerShell's Disable-PnpDevice / Enable-PnpDevice to disable and
-        re-enable the device matching the supplied VID/PID. Requires administrator
-        privileges; returns True if the device was successfully toggled.
-
-        vid and pid should be hex strings (case-insensitive), e.g. '04B4' and '1004'.
-        """
-        # Build PowerShell command to find device instance IDs matching VID/PID
-        # We'll disable then enable; use -Confirm:$false to avoid prompts.
-        match = f"*VID_{vid.upper()}*PID_{pid.upper()}*"
-        # PowerShell command to disable matching devices
-        disable_cmd = (
-            f"Get-PnpDevice -PresentOnly | Where-Object {{$_.InstanceId -like '{match}'}} | "
-            "Disable-PnpDevice -Confirm:$false"
-        )
-        enable_cmd = (
-            f"Get-PnpDevice -PresentOnly | Where-Object {{$_.InstanceId -like '{match}'}} | "
-            "Enable-PnpDevice -Confirm:$false"
-        )
-
-        for attempt in range(attempts):
-            try:
-                # Disable
-                p1 = subprocess.run([
-                    "powershell",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    disable_cmd,
-                ], capture_output=True, timeout=timeout)
-                # Give the OS a moment
-                time.sleep(0.5)
-                # Enable
-                p2 = subprocess.run([
-                    "powershell",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    enable_cmd,
-                ], capture_output=True, timeout=timeout)
-
-                stdout = (p1.stdout or b"") + (p2.stdout or b"")
-                stderr = (p1.stderr or b"") + (p2.stderr or b"")
-
-                # If PowerShell returned non-zero, it may still have worked for some devices.
-                if p1.returncode == 0 and p2.returncode == 0:
-                    return True
-                # If not zero, try again a limited number of times
-                self._log_ps(cmds=(disable_cmd, enable_cmd), out=stdout, err=stderr)
-            except subprocess.TimeoutExpired:
-                # try again
-                continue
-            except Exception:
-                continue
-
-        return False
-
-    def _log_ps(self, cmds=None, out=b"", err=b""):
-        try:
-            # Best-effort debug output; don't raise on failure
-            msg = f"PowerShell cmds: {cmds}\nstdout: {out.decode(errors='ignore')}\nstderr: {err.decode(errors='ignore')}"
-            # If the UI isn't available, just print
-            try:
-                print(msg)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-    def restore_registers(self):
-        """Rewrite register configuration to the device (helpful after reset).
-
-        This runs through the same sequence as `refresh` which reads and writes
-        registers and prepares the device. Returns True on success.
-        """
-        try:
-            return self.refresh()
-        except Exception:
-            # try a safer manual restore path
-            try:
-                self.reset_regs()
-                self.set_regs()
-                rc, _ = self.transfer_registers(list(self.RegsIn), list(self.RegsEnable))
-                return rc == 0
-            except Exception:
-                return False
