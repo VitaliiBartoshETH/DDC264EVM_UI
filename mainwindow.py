@@ -30,7 +30,15 @@ class ReaderWorker(QObject):
     file_saved = pyqtSignal(str)  # emits the file path
 
     def __init__(
-        self, fpga, folder_path, file_name, numFiles, max_retries=1, poll_timeout=1.0
+        self,
+        fpga,
+        folder_path,
+        file_name,
+        numFiles,
+        max_retries=1,
+        poll_timeout=1.0,
+        pause_enabled=False,
+        pause_seconds=1.0,
     ):
         super().__init__()
         self.fpga = fpga
@@ -40,6 +48,12 @@ class ReaderWorker(QObject):
         self.readFilePath = None
         self.max_retries = max_retries
         self.poll_timeout = poll_timeout
+        # Pause between measurements settings
+        self.pause_enabled = bool(pause_enabled)
+        try:
+            self.pause_seconds = float(pause_seconds)
+        except Exception:
+            self.pause_seconds = 1.0
         self._powercycle_ack = False
         self._waiting_for_powercycle = False
         self._stop_requested = False
@@ -344,6 +358,13 @@ class ReaderWorker(QObject):
                 if getattr(self, "_stop_requested", False):
                     self.status.emit("Worker: stopping after current file due to stop request")
                     break
+
+                # Pause between measurements if requested and multiple files
+                try:
+                    if getattr(self, "pause_enabled", False) and self.numFiles > 1 and i < (self.numFiles - 1):
+                        time.sleep(self.pause_seconds)
+                except Exception:
+                    pass
 
             self.status.emit("Data read successfully")
             # final readFilePath: use last saved filename
@@ -796,6 +817,15 @@ class Ui(QMainWindow):
             # Rotation controls: checkbox + number of angles + HOME button
             self.rotationCheckbox = QCheckBox("Rotation", self)
             self.rotationCheckbox.setChecked(False)
+            # Pause controls: checkbox + seconds spinbox (will be placed under rotation)
+            self.pauseCheckbox = QCheckBox("Pause", self)
+            self.pauseCheckbox.setChecked(False)
+            self.pauseSeconds = QDoubleSpinBox(self)
+            self.pauseSeconds.setRange(0.01, 3600.0)
+            self.pauseSeconds.setSingleStep(0.1)
+            self.pauseSeconds.setDecimals(2)
+            self.pauseSeconds.setValue(1.0)
+            self.pauseSeconds.setFixedWidth(80)
             # numeric input for number of angles (per full rotation)
             self.angleNum = QLineEdit(self)
             self.angleNum.setText("4")
@@ -899,8 +929,18 @@ class Ui(QMainWindow):
             self.stepperControlLayout = QHBoxLayout(self.stepperControlWidget)
             self.stepperControlLayout.setContentsMargins(0, 0, 0, 0)
             self.stepperControlLayout.setSpacing(5)
-            # Add widgets in order: Rotation checkbox, angleNum, HOME, Custom angle, customAngleInput, Set HOME
-            self.stepperControlLayout.addWidget(self.rotationCheckbox)
+            # Create a small vertical group for rotation + pause so the pause controls
+            # appear under the rotation checkbox and don't shift other widgets.
+            self.rotationGroupWidget = QWidget(self)
+            self.rotationGroupLayout = QVBoxLayout(self.rotationGroupWidget)
+            self.rotationGroupLayout.setContentsMargins(0, 0, 0, 0)
+            self.rotationGroupLayout.setSpacing(2)
+            # Add rotation checkbox at top
+            self.rotationGroupLayout.addWidget(self.rotationCheckbox)
+
+            # Add the rotation group to the main stepper control row
+            self.stepperControlLayout.addWidget(self.rotationGroupWidget)
+            # Add remaining widgets in order: angleNum, HOME, Custom angle, customAngleInput, Set HOME
             self.stepperControlLayout.addWidget(self.angleNum)
             self.stepperControlLayout.addWidget(self.homeButton)
             self.stepperControlLayout.addWidget(self.customAngleButton)
@@ -926,6 +966,16 @@ class Ui(QMainWindow):
                 combinedLayout.setContentsMargins(0, 0, 0, 0)
                 combinedLayout.setSpacing(2)
                 combinedLayout.addWidget(self.stepperControlWidget)
+                # Pause controls row under the rotation controls
+                self.pauseRowWidget = QWidget(self)
+                pauseRowLayout = QHBoxLayout(self.pauseRowWidget)
+                pauseRowLayout.setContentsMargins(0, 0, 0, 0)
+                pauseRowLayout.setSpacing(4)
+                pauseRowLayout.addWidget(self.pauseCheckbox)
+                pauseRowLayout.addWidget(QLabel("Pause (s):", self))
+                pauseRowLayout.addWidget(self.pauseSeconds)
+                pauseRowLayout.addStretch()
+                combinedLayout.addWidget(self.pauseRowWidget)
                 combinedLayout.addWidget(self.stepperRevWidget)
             except Exception:
                 self.stepperCombinedWidget = None
@@ -1861,7 +1911,16 @@ class Ui(QMainWindow):
             self.progressBar.setValue(0)
             self.progressBar.show()
             self.thread = QThread()
-            self.worker = ReaderWorker(self.fpga, folder_path, file_name, numFiles, max_retries=2, poll_timeout=8.0)
+            self.worker = ReaderWorker(
+                self.fpga,
+                folder_path,
+                file_name,
+                numFiles,
+                max_retries=2,
+                poll_timeout=8.0,
+                pause_enabled=(getattr(self, 'pauseCheckbox', None) and self.pauseCheckbox.isChecked()),
+                pause_seconds=(getattr(self, 'pauseSeconds', None) and self.pauseSeconds.value()),
+            )
             self.worker.moveToThread(self.thread)
             try:
                 self.worker._stop_requested = False
@@ -2106,7 +2165,16 @@ class Ui(QMainWindow):
 
         # create and start worker for this batch
         self.thread = QThread()
-        self.worker = ReaderWorker(self.fpga, folder_path, file_name, numFiles, max_retries=2, poll_timeout=8.0)
+        self.worker = ReaderWorker(
+            self.fpga,
+            folder_path,
+            file_name,
+            numFiles,
+            max_retries=2,
+            poll_timeout=8.0,
+            pause_enabled=(getattr(self, 'pauseCheckbox', None) and self.pauseCheckbox.isChecked()),
+            pause_seconds=(getattr(self, 'pauseSeconds', None) and self.pauseSeconds.value()),
+        )
         self.worker.moveToThread(self.thread)
         try:
             self.worker._stop_requested = False
@@ -2275,38 +2343,6 @@ class Ui(QMainWindow):
 
         self._update_1d_layout(checked)
         self.build_image()
-        # Try to reuse a persistent controller if available
-        created_locally = False
-        rc = getattr(self, '_rotation_controller', None)
-        if rc is None:
-            rc = self._ensure_rotation_controller()
-        if rc is None:
-            # fallback: create a temporary controller for this rotation
-            port = self._find_arduino_port() or getattr(self, '_rotation_port', None) or "COM6"
-            try:
-                rc = RotationalController(port=port)
-                created_locally = True
-            except Exception as e:
-                self._handle_worker_status(f"Failed to open rotation controller for rotation: {e}")
-                return
-
-        t0 = time.time()
-        try:
-            self._handle_worker_status(f"Rotating {angle_deg}° (port {getattr(rc, 'arduino', None) and getattr(rc.arduino, 'port', getattr(self, '_rotation_port', 'unknown'))})")
-            rc.rotate(angle_deg)
-            # Add small settling time after motor completes rotation (can be reduced)
-            time.sleep(0.5)
-            try:
-                self._handle_worker_status(f"Rotation complete in {time.time()-t0:.3f}s")
-            except Exception:
-                pass
-        finally:
-            if created_locally:
-                try:
-                    if getattr(rc, 'arduino', None):
-                        rc.arduino.close()
-                except Exception:
-                    pass
 
     def _send_arduino_command(self, command_dict, timeout=5.0):
         """Send a command to Arduino, read and display the response.
