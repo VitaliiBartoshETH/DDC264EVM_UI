@@ -414,6 +414,11 @@ class FPGAControl:
         os.makedirs(os.path.dirname(filename), exist_ok=True)
 
         with open(filename, "w") as dataFile:
+            # record which integrator came first in the captured data (0 = A-first, 1 = B-first)
+            try:
+                dataFile.write(f"#AORB:{all_data_aorbfirst}\n")
+            except Exception:
+                pass
             samples_per_channel = reads // 2
 
             bit_rate = next(k for k, v in self.bit_rates.items() if v == self.DDCbit8)

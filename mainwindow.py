@@ -2490,6 +2490,7 @@ class Ui(QMainWindow):
 
     def load_trace_file(self, file_path=None):
         self.file_data = {}
+        self.file_meta = {}
         if not file_path:
             options = QFileDialog.Options()
             file_path, _ = QFileDialog.getOpenFileName(
@@ -2506,13 +2507,52 @@ class Ui(QMainWindow):
             self.readFilePath.setText(file_path.split("/")[-1])
             with open(file_path) as f:
                 lines = f.readlines()
+                # parse potential metadata header (e.g., #AORB:0)
+                aorbfirst = None
+                raw = []
                 for line in lines:
-                    if line.split(",")[0] not in self.file_data:
-                        self.file_data[line.split(",")[0]] = [float(line.split(",")[2])]
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("#AORB:"):
+                        try:
+                            aorbfirst = int(line.split(":", 1)[1])
+                        except Exception:
+                            aorbfirst = None
+                        continue
+                    raw.append(line)
+                # collect A/B series per channel
+                temp = {}
+                for line in raw:
+                    parts = [p.strip() for p in line.split(",")]
+                    key = parts[0]
+                    val = float(parts[2])
+                    temp.setdefault(key, []).append(val)
+
+                # combine A/B into full sequences per channel using aorbfirst
+                combined = {}
+                # find unique channel ids (without suffix)
+                channels = set(k[:-1] for k in temp.keys() if len(k) > 0)
+                for ch in channels:
+                    keyA = f"{ch}A"
+                    keyB = f"{ch}B"
+                    A = temp.get(keyA, [])
+                    B = temp.get(keyB, [])
+                    first_is_A = True if aorbfirst is None or aorbfirst == 0 else False
+                    # Do not interleave — the measured order may already reflect time sequence.
+                    # Concatenate blocks in the measured order: A block then B block if A-first,
+                    # otherwise B block then A block.
+                    if first_is_A:
+                        full = A + B
                     else:
-                        self.file_data[line.split(",")[0]].append(
-                            float(line.split(",")[2])
-                        )
+                        full = B + A
+                    combined[ch] = full
+
+                # store combined sequences under file_data with same key format as before (e.g., '01')
+                for ch, seq in combined.items():
+                    self.file_data[ch] = seq
+                if aorbfirst is not None:
+                    self.file_meta['aorbfirst'] = aorbfirst
             if self.traceNumber.currentText() == "--":
                 self.traceNumber.setCurrentText("Mean value")
             self.plot_trace()
@@ -2524,25 +2564,22 @@ class Ui(QMainWindow):
             self.graphWidget.clear()
             trace = self.traceNumber.currentText()
             if not (trace == "--"):
-
                 if trace == "Mean value":
                     self.graphWidget.setLabel("bottom", "Channel")
-                    x = list(range(512))
-                    sorted_keys = sorted(
-                        self.file_data.keys(), key=lambda x: (x[-1], int(x[:-1]))
-                    )
-                    y = [
-                        self.fpga.convert_adc(np.mean(self.file_data[key]))
-                        for key in sorted_keys
-                    ]
+                    # mean over full sequences (use combined sequences length)
+                    sorted_keys = sorted(self.file_data.keys(), key=lambda x: int(x))
+                    x = list(range(len(sorted_keys)))
+                    y = [self.fpga.convert_adc(np.mean(self.file_data[key])) for key in sorted_keys]
                     color = "r"
                 else:
                     self.graphWidget.setLabel("bottom", "Time")
-                    prefix = "0" if int(trace[:-1]) < 10 else ""
-                    x = list(range(512))
-                    y = self.fpga.convert_adc(
-                        np.array(self.file_data[f"{prefix}{trace}"])
-                    )
+                    # trace selection uses channel number (e.g., '01A' or '01') in UI; normalize
+                    ch_text = trace[:-1] if trace.endswith(('A','B')) else trace
+                    prefix = "0" if int(ch_text) < 10 else ""
+                    key = f"{prefix}{ch_text}"
+                    seq = self.file_data.get(key, [])
+                    x = list(range(len(seq)))
+                    y = self.fpga.convert_adc(np.array(seq))
                     color = "b"
 
                 self.graphWidget.plot(
@@ -2571,16 +2608,47 @@ class Ui(QMainWindow):
         try:
             setattr(self, file_name_attr, file_path)
             with open(file_path) as f:
-                peaks = {}
-                for i, line in enumerate(f.readlines()):
-                    if line.split(",")[0] not in peaks:
-                        peaks[line.split(",")[0]] = [
-                            self.fpga.convert_adc(float(line.split(",")[2]))
-                        ]
+                lines = f.readlines()
+                aorbfirst = None
+                raw = []
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("#AORB:"):
+                        try:
+                            aorbfirst = int(line.split(":", 1)[1])
+                        except Exception:
+                            aorbfirst = None
+                        continue
+                    raw.append(line)
+
+                # collect A/B series per channel with ADC conversion
+                temp = {}
+                for i, line in enumerate(raw):
+                    parts = [p.strip() for p in line.split(",")]
+                    key = parts[0]
+                    val = self.fpga.convert_adc(float(parts[2]))
+                    temp.setdefault(key, []).append(val)
+
+                # combine A/B into full sequences per channel using aorbfirst
+                combined = {}
+                channels = set(k[:-1] for k in temp.keys() if len(k) > 0)
+                for ch in channels:
+                    keyA = f"{ch}A"
+                    keyB = f"{ch}B"
+                    A = temp.get(keyA, [])
+                    B = temp.get(keyB, [])
+                    first_is_A = True if aorbfirst is None or aorbfirst == 0 else False
+                    # Do not interleave — concatenate measured blocks in order.
+                    if first_is_A:
+                        full = A + B
                     else:
-                        peaks[line.split(",")[0]].append(
-                            self.fpga.convert_adc(float(line.split(",")[2]))
-                        )
+                        full = B + A
+                    combined[ch] = full
+
+                # We'll compute peaks (signal, left_mean) from combined sequences
+                peaks = {}
                 try:
                     if (
                         int(self.edgeLeft.text()) < 0
@@ -2592,22 +2660,25 @@ class Ui(QMainWindow):
                     # Determine processing mode based on normalization dropdown
                     norm_mode = self.useNormalization.currentText()
                     
-                    for key, value in peaks.items():
+                    for ch, value in combined.items():
                         if norm_mode == "flat-field only":
                             # Use full trace mean (no baseline subtraction)
-                            full_mean = np.mean(value)
-                            peaks[key] = (full_mean, 0)  # Signal = full mean, dark current = 0
+                            full_mean = np.mean(value) if len(value) > 0 else 0
+                            # store under same key format used later (e.g., '01A')
+                            formatted = ch if int(ch) >= 10 else f"0{int(ch)}"
+                            peaks[f"{formatted}A"] = (full_mean, 0)
                         elif norm_mode == "leakage/flat-field from open beam":
                             # Calculate right_mean, but baseline correction will use open beam baseline
-                            right_mean = np.mean(value[int(self.edgeRight.text()) :])
-                            left_mean = np.mean(value[: int(self.edgeLeft.text())])
-                            # Store right_mean as signal (will be corrected in build_image with open beam baseline)
-                            peaks[key] = (right_mean, left_mean)  # Store both for later processing
+                            right_mean = np.mean(value[int(self.edgeRight.text()) :]) if len(value) > int(self.edgeRight.text()) else 0
+                            left_mean = np.mean(value[: int(self.edgeLeft.text())]) if int(self.edgeLeft.text()) > 0 else 0
+                            formatted = ch if int(ch) >= 10 else f"0{int(ch)}"
+                            peaks[f"{formatted}A"] = (right_mean, left_mean)
                         else:
                             # Original behavior: use edge-based baseline subtraction
-                            right_mean = np.mean(value[int(self.edgeRight.text()) :])
-                            left_mean = np.mean(value[: int(self.edgeLeft.text())])
-                            peaks[key] = (right_mean - left_mean, left_mean)
+                            right_mean = np.mean(value[int(self.edgeRight.text()) :]) if len(value) > int(self.edgeRight.text()) else 0
+                            left_mean = np.mean(value[: int(self.edgeLeft.text())]) if int(self.edgeLeft.text()) > 0 else 0
+                            formatted = ch if int(ch) >= 10 else f"0{int(ch)}"
+                            peaks[f"{formatted}A"] = (right_mean - left_mean, left_mean)
                 except ValueError:
                     self.statusBar().showMessage("Invalid edge values")
                     return np.zeros((16, 16))

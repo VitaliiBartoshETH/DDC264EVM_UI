@@ -727,6 +727,26 @@ decoder_matrix_sample1.txt — 128 lines × 1 channel
   switching back to 2‑D.  The toggle handler also rebuilds the image and
   updates layout immediately, so the new size is used without extra clicks.
 
+- **May 2026**: Fixes and improvements related to acquisition ordering and UI
+    controls
+    - **CONV_WAIT:** Reset the FPGA `CONV_WAIT` registers to 0 to remove an
+        unintended long delay between integrator blocks and restore pipelined
+        acquisition.
+    - **Saved-file header:** Restored the old-style file write ordering for
+        backwards compatibility and added a header line `#AORB:<0|1>` to new data
+        files indicating whether the A or B integrator block arrived first.
+    - **Loader stitching:** `load_trace_file()` and `load_file()` now parse the
+        `#AORB` header (when present) and concatenate the A/B blocks in the
+        measured order so plots and image reconstruction use the full sequences.
+    - **Pause UI:** Added a `Pause` checkbox and `Pause (s)` numeric field in
+        the rotation/stepper area; the `ReaderWorker` supports an optional pause
+        between saved files (applies after each save).
+    - **Robustness fixes:** Removed a local import that caused an
+        `UnboundLocalError`, eliminated an accidental duplicated rotation block,
+        and improved indexing/indentation related to the data writer.
+    - **Docs:** This CHANGELOG entry documents the above edits; see the code
+        for exact locations (`tools/fpga_control.py`, `mainwindow.py`).
+
 ## Quick Reference: Adding a New Normalization Mode
 
 1. Add option to `useNormalization` ComboBox in `__init__`
