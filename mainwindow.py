@@ -2650,9 +2650,14 @@ class Ui(QMainWindow):
                 # We'll compute peaks (signal, left_mean) from combined sequences
                 peaks = {}
                 try:
+                    # Determine maximum available trace length from combined sequences
+                    max_len = 0
+                    if len(combined) > 0:
+                        max_len = max(len(v) for v in combined.values())
+
                     if (
                         int(self.edgeLeft.text()) < 0
-                        or int(self.edgeRight.text()) > 512
+                        or int(self.edgeRight.text()) > max_len
                         or int(self.edgeLeft.text()) >= int(self.edgeRight.text())
                     ):
                         raise ValueError
