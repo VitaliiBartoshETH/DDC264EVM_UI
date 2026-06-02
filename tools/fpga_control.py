@@ -423,25 +423,35 @@ class FPGAControl:
 
             bit_rate = next(k for k, v in self.bit_rates.items() if v == self.DDCbit8)
 
-            # Write A and B integrator samples honoring measured ordering.
-            # The device indicates sequencing with all_data_aorbfirst (0 = A-first, 1 = B-first).
+            # Write A integrator samples (keep legacy file layout: all A samples then all B samples)
+            # Map buffer indices according to measured ordering (all_data_aorbfirst)
             for ch in range(channels - 1, -1, -1):
                 prefix = "0" if (ch + 1) < 10 else ""
 
                 for sample_idx in range(samples_per_channel):
+                    # If device returned A-first, A samples are at sample_idx*channels + ch
+                    # If device returned B-first, A samples are at (sample_idx + samples_per_channel)*channels + ch
                     if all_data_aorbfirst == 0:
-                        # A-block is first in the captured buffer
                         data_idx_a = sample_idx * channels + ch
-                        data_idx_b = (sample_idx + samples_per_channel) * channels + ch
                     else:
-                        # B-block is first in the captured buffer
-                        data_idx_b = sample_idx * channels + ch
                         data_idx_a = (sample_idx + samples_per_channel) * channels + ch
 
                     if data_idx_a < len(all_data):
                         dataFile.write(
                             f"{prefix}{ch+1}A, {sample_idx}, {all_data[data_idx_a]}, {0}, {0}, {bit_rate}\n"
                         )
+
+            # Write B integrator samples (legacy layout), mapping indices similarly
+            for ch in range(channels - 1, -1, -1):
+                prefix = "0" if (ch + 1) < 10 else ""
+
+                for sample_idx in range(samples_per_channel):
+                    # If device returned A-first, B samples are at (sample_idx + samples_per_channel)*channels + ch
+                    # If device returned B-first, B samples are at sample_idx*channels + ch
+                    if all_data_aorbfirst == 0:
+                        data_idx_b = (sample_idx + samples_per_channel) * channels + ch
+                    else:
+                        data_idx_b = sample_idx * channels + ch
 
                     if data_idx_b < len(all_data):
                         dataFile.write(

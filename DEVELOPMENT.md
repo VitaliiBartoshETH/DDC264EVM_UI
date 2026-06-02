@@ -744,6 +744,15 @@ decoder_matrix_sample1.txt — 128 lines × 1 channel
     - **Robustness fixes:** Removed a local import that caused an
         `UnboundLocalError`, eliminated an accidental duplicated rotation block,
         and improved indexing/indentation related to the data writer.
+    - **Writer & Loader fixes (May 26 2026):**
+        - **Writer:** `tools/fpga_control.get_data()` now honors the measured
+            integrator ordering (`all_data_aorbfirst`) when indexing A/B samples,
+            so saved files accurately reflect which integrator block arrived
+            first.
+        - **Loader:** `load_file()`/`load_trace_file()` edge validation now uses
+            the actual combined trace length (e.g., 1024 samples) instead of a
+            hardcoded 512 value; this fixes failures in correction/normalization
+            modes that relied on edge-based baseline subtraction.
     - **Docs:** This CHANGELOG entry documents the above edits; see the code
         for exact locations (`tools/fpga_control.py`, `mainwindow.py`).
 

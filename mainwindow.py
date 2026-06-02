@@ -2521,13 +2521,27 @@ class Ui(QMainWindow):
                             aorbfirst = None
                         continue
                     raw.append(line)
-                # collect A/B series per channel
+                # collect A/B series per channel with explicit sample indices
                 temp = {}
                 for line in raw:
                     parts = [p.strip() for p in line.split(",")]
+                    if len(parts) < 3:
+                        continue
                     key = parts[0]
-                    val = float(parts[2])
-                    temp.setdefault(key, []).append(val)
+                    try:
+                        sample_idx = int(parts[1])
+                    except Exception:
+                        # fallback to append-order index if malformed
+                        sample_idx = None
+                    try:
+                        val = float(parts[2])
+                    except Exception:
+                        continue
+                    if sample_idx is None:
+                        # preserve original append-order behavior
+                        temp.setdefault(key, {})[len(temp.get(key, {}))] = val
+                    else:
+                        temp.setdefault(key, {})[sample_idx] = val
 
                 # combine A/B into full sequences per channel using aorbfirst
                 combined = {}
@@ -2536,12 +2550,13 @@ class Ui(QMainWindow):
                 for ch in channels:
                     keyA = f"{ch}A"
                     keyB = f"{ch}B"
-                    A = temp.get(keyA, [])
-                    B = temp.get(keyB, [])
+                    A_dict = temp.get(keyA, {})
+                    B_dict = temp.get(keyB, {})
+                    # assemble ordered lists from sample-index dictionaries
+                    A = [A_dict[i] for i in sorted(A_dict.keys())] if A_dict else []
+                    B = [B_dict[i] for i in sorted(B_dict.keys())] if B_dict else []
                     first_is_A = True if aorbfirst is None or aorbfirst == 0 else False
-                    # Do not interleave — the measured order may already reflect time sequence.
-                    # Concatenate blocks in the measured order: A block then B block if A-first,
-                    # otherwise B block then A block.
+                    # Concatenate measured blocks in the order indicated by header
                     if first_is_A:
                         full = A + B
                     else:
